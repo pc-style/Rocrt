@@ -79,6 +79,7 @@ export const Events = {
   BRUSH_COLOR_CHANGED: 'luma:brush-color-changed',
   BRUSH_OPACITY_CHANGED: 'luma:brush-opacity-changed',
   BRUSH_STABILIZATION_CHANGED: 'luma:brush-stabilization-changed',
+  BRUSH_PRESET_SELECTED: 'luma:brush-preset-selected',
   LAYER_VISIBILITY_TOGGLED: 'luma:layer-visibility-toggled',
   LAYER_OPACITY_CHANGED: 'luma:layer-opacity-changed',
   LAYER_BLEND_MODE_CHANGED: 'luma:layer-blend-mode-changed',

@@ -1,4 +1,5 @@
 import { SkiaRenderer } from './valkyrie/skia-renderer';
+import { SettingsManager } from './core/settings';
 import { InputSampler } from './sensory';
 import { HistoryStack, IndexedDBStore, UndoExecutor, StoredProject } from './chronos';
 import { CanvasState, createLayer } from './chronos/canvas-state';
@@ -7,90 +8,9 @@ import { mountUI } from './luma/canvas-overlay';
 import { BRUSH_DEFAULTS, CANVAS_VIEW_DEFAULTS, CANVAS_DEFAULTS, GRID_DEFAULTS, ROTATION_SNAP_DEGREES } from './core/config';
 import { eventBus, Events } from './core/events';
 import { BlendMode, PointerType } from './core/types';
-import type { InputPoint, Color, Stroke, Point2D, GestureData, Layer, Canvas } from './core/types';
+import type { InputPoint, Color, Stroke, Point2D, GestureData, Layer, Canvas, SerializedLayer, SerializedStroke, SerializedFill, FillRecord, SelectionState, ProjectData } from './core/types';
 
-interface SerializedLayer {
-  id: string;
-  name: string;
-  visible: boolean;
-  locked: boolean;
-  alphaLocked: boolean;
-  opacity: number;
-  blendMode: BlendMode;
-  zIndex: number;
-  createdAt: number;
-}
 
-interface SerializedStroke {
-  id: string;
-  layerId: string;
-  points: InputPoint[];
-  color: Color;
-  size: number;
-  timestamp: number;
-  duration: number;
-}
-
-interface SerializedFill {
-  id: string;
-  layerId: string;
-  width: number;
-  height: number;
-  timestamp: number;
-  pixels: string;
-}
-
-interface FillRecord {
-  id: string;
-  layerId: string;
-  width: number;
-  height: number;
-  pixels: Uint8Array;
-  timestamp: number;
-}
-
-interface SelectionState {
-  basePolygon: Point2D[];
-  transformedPolygon: Point2D[];
-  baseCenter: Point2D;
-  center: Point2D;
-  bounds: { minX: number; minY: number; maxX: number; maxY: number };
-  selectedStrokeIds: string[];
-  transform: { tx: number; ty: number; scale: number; rotation: number };
-}
-
-interface ProjectData {
-  version: 1;
-  exportedAt: number;
-  canvas: {
-    id: string;
-    width: number;
-    height: number;
-    backgroundColor: Color;
-    layers: SerializedLayer[];
-    activeLayerId: string;
-    referenceLayerId?: string | null;
-    createdAt: number;
-    modifiedAt: number;
-  };
-  strokes: SerializedStroke[];
-  fills: SerializedFill[];
-  view: {
-    zoom: number;
-    pan: Point2D;
-    rotation: number;
-  };
-  grid: {
-    visible: boolean;
-    spacing: number;
-    color: Color;
-  };
-  brush: {
-    size: number;
-    color: Color;
-    stabilization: number;
-  };
-}
 
 class OpenCanvasApp {
   private skiaRenderer: SkiaRenderer;
@@ -98,6 +18,7 @@ class OpenCanvasApp {
   private history: HistoryStack;
   private undoExecutor: UndoExecutor;
   private canvasState: CanvasState;
+  private settingsManager: SettingsManager;
   private viewTransformer: ViewTransformer;
   private dbStore: IndexedDBStore;
   private strokeIndex: Map<string, Stroke> = new Map();
@@ -113,40 +34,11 @@ class OpenCanvasApp {
   private quickShapeCornerAngle = 0.55;
   private quickShapeCornerSeparation = 12;
   private currentStabilization: number = BRUSH_DEFAULTS.stabilization;
-  private currentBrushPreset: {
-    spacing: number;
-    scatter: number;
-    scatterBoth: boolean;
-    rotation: number;
-    rotationJitter: number;
-    rotateToStroke: boolean;
-    sizeJitter: number;
-    count: number;
-    flow: number;
-    roundness: number;
-    hardness: number;
-  } = {
-      spacing: 0.05,
-      scatter: 0,
-      scatterBoth: true,
-      rotation: 0,
-      rotationJitter: 0,
-      rotateToStroke: false,
-      sizeJitter: 0,
-      count: 1,
-      flow: 1,
-      roundness: 1,
-      hardness: 1,
-    };
   private lastSmoothedPoint: InputPoint | null = null;
 
   private soloLayerId: string | null = null;
   private savedLayerVisibility: Map<string, boolean> | null = null;
-  private readonly brushStorageKey = 'opencanvas:brush-settings';
-  private readonly viewStorageKey = 'opencanvas:view-settings';
-  private readonly readonlyStorageKey = 'opencanvas:readonly';
-  private readonly backgroundStorageKey = 'opencanvas:background-color';
-  private readonly gridStorageKey = 'opencanvas:grid-settings';
+
   private isReadOnly = false;
   private autosaveTimer: number | null = null;
   private lastAutosaveAt = 0;
@@ -166,6 +58,7 @@ class OpenCanvasApp {
   private alphaLockRejecting = false;
   private colorDropActive = false;
   private colorDropThreshold = 0.15;
+  private selectedBrushId: string | undefined;
   private colorDropDragging = false;
   private colorDropSeed: InputPoint | null = null;
   private colorDropStartX = 0;
@@ -376,6 +269,7 @@ class OpenCanvasApp {
     this.history = new HistoryStack();
     this.undoExecutor = new UndoExecutor();
     this.canvasState = new CanvasState();
+    this.settingsManager = new SettingsManager();
     this.viewTransformer = new ViewTransformer();
     this.dbStore = new IndexedDBStore();
   }
@@ -657,17 +551,8 @@ class OpenCanvasApp {
     eventBus.on('brush:preset-changed', (preset: {
       size?: number;
       opacity?: number;
-      spacing?: number;
-      scatter?: number;
-      scatterBoth?: boolean;
-      rotation?: number;
-      rotationJitter?: number;
-      rotateToStroke?: boolean;
-      sizeJitter?: number;
-      count?: number;
-      flow?: number;
-      roundness?: number;
       hardness?: number;
+      id?: string;
     }) => {
       if (!preset) return;
 
@@ -682,20 +567,9 @@ class OpenCanvasApp {
         this.skiaRenderer.setColor(this.currentColor);
       }
 
-      // Store advanced properties for brush rendering
-      this.currentBrushPreset = {
-        spacing: preset.spacing ?? 0.05,
-        scatter: preset.scatter ?? 0,
-        scatterBoth: preset.scatterBoth ?? true,
-        rotation: preset.rotation ?? 0,
-        rotationJitter: preset.rotationJitter ?? 0,
-        rotateToStroke: preset.rotateToStroke ?? false,
-        sizeJitter: preset.sizeJitter ?? 0,
-        count: preset.count ?? 1,
-        flow: preset.flow ?? 1,
-        roundness: preset.roundness ?? 1,
-        hardness: preset.hardness ?? 1,
-      };
+      if (preset.id) {
+        this.selectedBrushId = preset.id;
+      }
 
       this.saveBrushSettings();
       this.scheduleAutosave();
@@ -1300,215 +1174,154 @@ class OpenCanvasApp {
   }
 
   private loadViewSettings(): void {
-    if (typeof window === 'undefined') return;
-    try {
-      const raw = window.localStorage.getItem(this.viewStorageKey);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as {
-        zoom?: number;
-        pan?: Point2D;
-        rotation?: number;
-        rotationSnap?: boolean;
-      };
-      if (parsed.zoom !== undefined && Number.isFinite(parsed.zoom)) {
-        this.viewTransformer.setZoom(parsed.zoom);
-      }
-      if (parsed.pan && Number.isFinite(parsed.pan.x) && Number.isFinite(parsed.pan.y)) {
-        this.viewTransformer.setPan({ x: parsed.pan.x, y: parsed.pan.y });
-      }
-      if (parsed.rotation !== undefined && Number.isFinite(parsed.rotation)) {
-        this.viewTransformer.setRotation(parsed.rotation);
-      }
-      if (typeof parsed.rotationSnap === 'boolean') {
-        this.rotationSnap = parsed.rotationSnap;
-        eventBus.emit(Events.VIEW_ROTATION_SNAP_TOGGLED, this.rotationSnap);
-      }
-    } catch (error) {
-      console.warn('Failed to load view settings', error);
+    const settings = this.settingsManager.loadViewSettings();
+    if (!settings) return;
+
+    if (settings.zoom && Number.isFinite(settings.zoom)) {
+      this.viewTransformer.setZoom(settings.zoom);
+    }
+    if (settings.pan) {
+      this.viewTransformer.setPan(settings.pan);
+    }
+    if (settings.rotation !== undefined && Number.isFinite(settings.rotation)) {
+      this.viewTransformer.setRotation(settings.rotation);
     }
   }
 
   private saveViewSettings(): void {
-    if (typeof window === 'undefined') return;
-    try {
-      const payload = {
-        zoom: this.viewTransformer.getZoom(),
-        pan: this.viewTransformer.getPan(),
-        rotation: this.viewTransformer.getRotation(),
-        rotationSnap: this.rotationSnap,
-      };
-      window.localStorage.setItem(this.viewStorageKey, JSON.stringify(payload));
-    } catch (error) {
-      console.warn('Failed to save view settings', error);
-    }
+    this.settingsManager.saveViewSettings({
+      zoom: this.viewTransformer.getZoom(),
+      pan: this.viewTransformer.getPan(),
+      rotation: this.viewTransformer.getRotation(),
+    });
   }
 
   private loadBrushSettings(): void {
-    if (typeof window === 'undefined') return;
-    try {
-      const raw = window.localStorage.getItem(this.brushStorageKey);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as {
-        size?: number;
-        color?: Color;
-        stabilization?: number;
+    const settings = this.settingsManager.loadBrushSettings();
+    if (!settings) return;
+
+    if (settings.size && Number.isFinite(settings.size)) {
+      this.currentSize = Math.max(BRUSH_DEFAULTS.minSize, Math.min(BRUSH_DEFAULTS.maxSize, settings.size));
+      this.skiaRenderer.setStrokeWidth(this.currentSize);
+      eventBus.emit(Events.BRUSH_SIZE_CHANGED, this.currentSize);
+    }
+    if (settings.color) {
+      const color = {
+        r: Math.max(0, Math.min(255, settings.color.r ?? this.currentColor.r)),
+        g: Math.max(0, Math.min(255, settings.color.g ?? this.currentColor.g)),
+        b: Math.max(0, Math.min(255, settings.color.b ?? this.currentColor.b)),
+        a: Math.max(0, Math.min(255, settings.color.a ?? this.currentColor.a)),
       };
-      if (parsed.size && Number.isFinite(parsed.size)) {
-        this.currentSize = Math.max(BRUSH_DEFAULTS.minSize, Math.min(BRUSH_DEFAULTS.maxSize, parsed.size));
-        this.skiaRenderer.setStrokeWidth(this.currentSize);
-        eventBus.emit(Events.BRUSH_SIZE_CHANGED, this.currentSize);
-      }
-      if (parsed.color) {
-        const color = {
-          r: Math.max(0, Math.min(255, parsed.color.r ?? this.currentColor.r)),
-          g: Math.max(0, Math.min(255, parsed.color.g ?? this.currentColor.g)),
-          b: Math.max(0, Math.min(255, parsed.color.b ?? this.currentColor.b)),
-          a: Math.max(0, Math.min(255, parsed.color.a ?? this.currentColor.a)),
-        };
-        this.currentColor = color;
-        this.skiaRenderer.setColor(color);
-        eventBus.emit(Events.BRUSH_COLOR_CHANGED, color);
-        eventBus.emit(Events.BRUSH_OPACITY_CHANGED, color.a / 255);
-      }
-      if (parsed.stabilization !== undefined && Number.isFinite(parsed.stabilization)) {
-        this.currentStabilization = Math.max(0, Math.min(1, parsed.stabilization));
-        eventBus.emit(Events.BRUSH_STABILIZATION_CHANGED, this.currentStabilization);
-      }
-    } catch (error) {
-      console.warn('Failed to load brush settings', error);
+      this.currentColor = color;
+      this.skiaRenderer.setColor(color);
+      eventBus.emit(Events.BRUSH_COLOR_CHANGED, color);
+      eventBus.emit(Events.BRUSH_OPACITY_CHANGED, color.a / 255);
+    }
+    if (settings.stabilization !== undefined && Number.isFinite(settings.stabilization)) {
+      this.currentStabilization = Math.max(0, Math.min(1, settings.stabilization));
+      eventBus.emit(Events.BRUSH_STABILIZATION_CHANGED, this.currentStabilization);
+    }
+    if (settings.selectedBrushId) {
+      this.selectedBrushId = settings.selectedBrushId;
+      eventBus.emit(Events.BRUSH_PRESET_SELECTED, { id: this.selectedBrushId });
     }
   }
 
   private loadBackgroundSettings(): void {
-    if (typeof window === 'undefined') return;
-    try {
-      const raw = window.localStorage.getItem(this.backgroundStorageKey);
-      if (!raw) {
-        this.skiaRenderer.setBackgroundColor(this.currentBackground);
-        return;
-      }
-      const parsed = JSON.parse(raw) as Color;
-      if (!parsed) return;
-      const color = {
-        r: Math.max(0, Math.min(255, parsed.r ?? this.currentBackground.r)),
-        g: Math.max(0, Math.min(255, parsed.g ?? this.currentBackground.g)),
-        b: Math.max(0, Math.min(255, parsed.b ?? this.currentBackground.b)),
-        a: Math.max(0, Math.min(255, parsed.a ?? this.currentBackground.a)),
-      };
-      this.currentBackground = color;
-      this.canvasState.setBackgroundColor(color);
-      this.skiaRenderer.setBackgroundColor(color);
-      eventBus.emit(Events.BACKGROUND_COLOR_CHANGED, color);
-    } catch (error) {
-      console.warn('Failed to load background color', error);
+    const color = this.settingsManager.loadBackgroundColor();
+    if (!color) {
       this.skiaRenderer.setBackgroundColor(this.currentBackground);
+      return;
     }
+
+    // Validate color components
+    const validatedColor = {
+      r: Math.max(0, Math.min(255, color.r ?? this.currentBackground.r)),
+      g: Math.max(0, Math.min(255, color.g ?? this.currentBackground.g)),
+      b: Math.max(0, Math.min(255, color.b ?? this.currentBackground.b)),
+      a: Math.max(0, Math.min(255, color.a ?? this.currentBackground.a)),
+    };
+
+    this.currentBackground = validatedColor;
+    this.canvasState.setBackgroundColor(validatedColor);
+    this.skiaRenderer.setBackgroundColor(validatedColor);
+    eventBus.emit(Events.BACKGROUND_COLOR_CHANGED, validatedColor);
   }
 
   private loadGridSettings(): void {
-    if (typeof window === 'undefined') return;
-    try {
-      const raw = window.localStorage.getItem(this.gridStorageKey);
-      if (!raw) {
-        this.skiaRenderer.setGridVisible(this.gridVisible);
-        this.skiaRenderer.setGridSpacing(this.gridSpacing);
-        return;
-      }
-      const parsed = JSON.parse(raw) as { visible?: boolean; spacing?: number; color?: Color; snap?: boolean };
-      if (typeof parsed.visible === 'boolean') {
-        this.gridVisible = parsed.visible;
-      }
-      if (parsed.spacing !== undefined && Number.isFinite(parsed.spacing)) {
-        this.gridSpacing = Math.max(8, Math.min(512, parsed.spacing));
-      }
-      if (parsed.color) {
-        this.gridColor = {
-          r: Math.max(0, Math.min(255, parsed.color.r ?? this.gridColor.r)),
-          g: Math.max(0, Math.min(255, parsed.color.g ?? this.gridColor.g)),
-          b: Math.max(0, Math.min(255, parsed.color.b ?? this.gridColor.b)),
-          a: Math.max(0, Math.min(255, parsed.color.a ?? this.gridColor.a)),
-        };
-      }
-      if (typeof parsed.snap === 'boolean') {
-        this.gridSnap = parsed.snap;
-      }
+    const settings = this.settingsManager.loadGridSettings();
+    if (!settings) {
       this.skiaRenderer.setGridVisible(this.gridVisible);
       this.skiaRenderer.setGridSpacing(this.gridSpacing);
-      this.skiaRenderer.setGridColor(this.gridColor);
-      eventBus.emit(Events.GRID_TOGGLED, this.gridVisible);
-      eventBus.emit(Events.GRID_SPACING_CHANGED, this.gridSpacing);
-      eventBus.emit(Events.GRID_COLOR_CHANGED, this.gridColor);
-      eventBus.emit(Events.GRID_SNAP_TOGGLED, this.gridSnap);
-    } catch (error) {
-      console.warn('Failed to load grid settings', error);
-      this.skiaRenderer.setGridVisible(this.gridVisible);
-      this.skiaRenderer.setGridSpacing(this.gridSpacing);
-      this.skiaRenderer.setGridColor(this.gridColor);
+      return;
     }
+
+    if (typeof settings.visible === 'boolean') {
+      this.gridVisible = settings.visible;
+    }
+    if (settings.spacing !== undefined && Number.isFinite(settings.spacing)) {
+      this.gridSpacing = Math.max(8, Math.min(512, settings.spacing));
+    }
+    if (settings.color) {
+      this.gridColor = {
+        r: Math.max(0, Math.min(255, settings.color.r ?? this.gridColor.r)),
+        g: Math.max(0, Math.min(255, settings.color.g ?? this.gridColor.g)),
+        b: Math.max(0, Math.min(255, settings.color.b ?? this.gridColor.b)),
+        a: Math.max(0, Math.min(255, settings.color.a ?? this.gridColor.a)),
+      };
+    }
+    if (typeof settings.snap === 'boolean') {
+      this.gridSnap = settings.snap;
+    }
+
+    this.skiaRenderer.setGridVisible(this.gridVisible);
+    this.skiaRenderer.setGridSpacing(this.gridSpacing);
+    this.skiaRenderer.setGridColor(this.gridColor);
+    eventBus.emit(Events.GRID_TOGGLED, this.gridVisible);
+    eventBus.emit(Events.GRID_SPACING_CHANGED, this.gridSpacing);
+    eventBus.emit(Events.GRID_COLOR_CHANGED, this.gridColor);
+    eventBus.emit(Events.GRID_SNAP_TOGGLED, this.gridSnap);
   }
 
   private loadReadOnlyState(): void {
-    if (typeof window === 'undefined') return;
-    try {
-      const raw = window.localStorage.getItem(this.readonlyStorageKey);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (typeof parsed === 'boolean' && parsed) {
-        // Prevent accidental lockout across sessions.
-        this.isReadOnly = false;
-        window.localStorage.setItem(this.readonlyStorageKey, JSON.stringify(false));
-        eventBus.emit(Events.READONLY_TOGGLED, { readonly: this.isReadOnly });
-      }
-    } catch (error) {
-      console.warn('Failed to load read-only state', error);
+    const isReadOnly = this.settingsManager.loadReadOnlyState();
+    if (isReadOnly === true) {
+      // Prevent accidental lockout across sessions.
+      this.isReadOnly = false;
+      this.settingsManager.saveReadOnlyState(false);
+      eventBus.emit(Events.READONLY_TOGGLED, { readonly: this.isReadOnly });
     }
   }
 
   private persistReadOnlyState(): void {
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(this.readonlyStorageKey, JSON.stringify(this.isReadOnly));
-    } catch (error) {
-      console.warn('Failed to save read-only state', error);
-    }
+    this.settingsManager.saveReadOnlyState(this.isReadOnly);
   }
 
   private saveBrushSettings(): void {
-    if (typeof window === 'undefined') return;
-    try {
-      const payload = {
-        size: this.currentSize,
-        color: this.currentColor,
-        stabilization: this.currentStabilization,
-      };
-      window.localStorage.setItem(this.brushStorageKey, JSON.stringify(payload));
-    } catch (error) {
-      console.warn('Failed to save brush settings', error);
+    const settings: import('./core/settings').BrushSettings = {
+      size: this.currentSize,
+      color: this.currentColor,
+      stabilization: this.currentStabilization,
+    };
+
+    if (this.selectedBrushId) {
+      settings.selectedBrushId = this.selectedBrushId;
     }
+
+    this.settingsManager.saveBrushSettings(settings);
   }
 
   private saveGridSettings(): void {
-    if (typeof window === 'undefined') return;
-    try {
-      const payload = {
-        visible: this.gridVisible,
-        spacing: this.gridSpacing,
-        color: this.gridColor,
-        snap: this.gridSnap,
-      };
-      window.localStorage.setItem(this.gridStorageKey, JSON.stringify(payload));
-    } catch (error) {
-      console.warn('Failed to save grid settings', error);
-    }
+    this.settingsManager.saveGridSettings({
+      visible: this.gridVisible,
+      spacing: this.gridSpacing,
+      color: this.gridColor,
+      snap: this.gridSnap,
+    });
   }
 
   private saveBackgroundSettings(): void {
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(this.backgroundStorageKey, JSON.stringify(this.currentBackground));
-    } catch (error) {
-      console.warn('Failed to save background color', error);
-    }
+    this.settingsManager.saveBackgroundColor(this.currentBackground);
   }
 
   private setEyedropperActive(active: boolean): void {
@@ -3111,20 +2924,6 @@ class OpenCanvasApp {
       };
     }
     return { ...point, x: mapped.x, y: mapped.y };
-  }
-
-  private clientToCanvasScreenPoint(clientX: number, clientY: number): Point2D | null {
-    const canvasEl = document.getElementById('canvas') as HTMLCanvasElement | null;
-    if (!canvasEl) return null;
-    const rect = canvasEl.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const x = (clientX - rect.left) * dpr;
-    const y = (clientY - rect.top) * dpr;
-    const width = canvasEl.width || canvasEl.clientWidth;
-    const height = canvasEl.height || canvasEl.clientHeight;
-    if (width <= 0 || height <= 0) return null;
-    if (x < 0 || y < 0 || x > width || y > height) return null;
-    return { x, y };
   }
 
   private isPointInLayerMask(layerId: string, point: InputPoint): boolean {

@@ -3,7 +3,10 @@ import type { InputPoint, BrushConfig, StampPlot, Point2D } from '../core/types'
 import { BlendMode } from '../core/types';
 import { BRUSH_DEFAULTS } from '../core/config';
 
-// Seeded random for reproducibility
+/**
+ * Seeded pseudo-random number generator for reproducible brush effects.
+ * Uses a linear congruential generator algorithm.
+ */
 class SeededRandom {
   private seed: number;
   constructor(seed: number = Date.now()) {
@@ -18,12 +21,15 @@ class SeededRandom {
   }
 }
 
+/**
+ * Brush engine that generates stamp plots from input points.
+ * Supports advanced features like scatter, rotation jitter, and pressure curves.
+ */
 export class BrushEngine implements IAlchemyBrush {
   private config: BrushConfig;
   private lastPlottedX: number = 0;
   private lastPlottedY: number = 0;
   private hasLastPoint: boolean = false;
-  private lastAngle: number = 0;
   private random: SeededRandom = new SeededRandom();
 
   constructor() {
@@ -49,6 +55,10 @@ export class BrushEngine implements IAlchemyBrush {
     };
   }
 
+  /**
+   * Updates brush configuration with partial config.
+   * Values are clamped to valid ranges.
+   */
   setBrush(config: Partial<BrushConfig>): void {
     if (config.baseSize !== undefined) {
       this.config.baseSize = Math.max(
@@ -107,21 +117,33 @@ export class BrushEngine implements IAlchemyBrush {
     }
   }
 
+  /** Returns a copy of the current brush configuration. */
   getBrush(): BrushConfig {
     return { ...this.config };
   }
 
+  /** Resets stroke state for a new stroke. */
   resetStroke(): void {
     this.hasLastPoint = false;
-    this.lastAngle = 0;
     this.random = new SeededRandom(Date.now());
   }
 
+  /**
+   * Generates stamp plots along input points based on brush settings.
+   * @param points - Array of input points with coordinates and pressure
+   * @returns Array of stamp plots to render
+   */
+  /**
+   * Generates stamp plots along input points based on brush settings.
+   * @param points - Array of input points with coordinates and pressure
+   * @returns Array of stamp plots to render
+   */
   plotStroke(points: InputPoint[]): StampPlot[] {
     if (points.length === 0) return [];
 
     const stamps: StampPlot[] = [];
-    const spacing = Math.max(1, this.config.baseSize * this.config.spacing);
+    // Minimum spacing to prevent infinite loops, max spacing for performance
+    const spacing = Math.max(1, this.config.baseSize * Math.max(0.05, this.config.spacing));
 
     for (let i = 0; i < points.length; i++) {
       const point = points[i]!;
@@ -139,27 +161,38 @@ export class BrushEngine implements IAlchemyBrush {
       const dy = point.y - this.lastPlottedY;
       const segmentDist = Math.sqrt(dx * dx + dy * dy);
 
-      if (segmentDist < 0.1) continue;
+      // Only plot if we've moved enough
+      if (segmentDist < 0.5) continue;
 
       // Calculate stroke direction angle
       const strokeAngle = Math.atan2(dy, dx) * (180 / Math.PI);
-      this.lastAngle = strokeAngle;
 
-      const steps = Math.ceil(segmentDist / spacing);
+      // Calculate number of steps based on spacing
+      // Using floor ensures we don't overshoot, but we need to track accumulation
+      // For simplicity in this engine, we'll step by spacing distance
+      const steps = Math.floor(segmentDist / spacing);
 
-      for (let s = 1; s <= steps; s++) {
-        const t = s / steps;
-        const x = this.lastPlottedX + dx * t;
-        const y = this.lastPlottedY + dy * t;
+      if (steps > 0) {
+        for (let s = 1; s <= steps; s++) {
+          // Using distT for interpolation
+          const distT = (s * spacing) / segmentDist;
 
-        const prevPressure = i > 0 ? points[i - 1]!.pressure : point.pressure;
-        const pressure = prevPressure + (point.pressure - prevPressure) * t;
+          const x = this.lastPlottedX + dx * distT;
+          const y = this.lastPlottedY + dy * distT;
 
-        this.addStampsAtPosition(stamps, x, y, pressure, strokeAngle);
+          // Interpolate pressure
+          const prevPressure = i > 0 ? points[i - 1]!.pressure : point.pressure;
+          const pressure = prevPressure + (point.pressure - prevPressure) * distT;
+
+          this.addStampsAtPosition(stamps, x, y, pressure, strokeAngle);
+        }
+
+        // Advance last plotted position to the last stamp location
+        // This keeps spacing consistent across points
+        const lastStepT = (steps * spacing) / segmentDist;
+        this.lastPlottedX = this.lastPlottedX + dx * lastStepT;
+        this.lastPlottedY = this.lastPlottedY + dy * lastStepT;
       }
-
-      this.lastPlottedX = point.x;
-      this.lastPlottedY = point.y;
     }
 
     return stamps;
@@ -176,27 +209,32 @@ export class BrushEngine implements IAlchemyBrush {
 
     for (let c = 0; c < count; c++) {
       // Calculate scatter offset
-      const scatterDistance = scatter * this.config.baseSize * 2 * this.random.next();
-      let scatterAngle: number;
+      let scatterX = 0;
+      let scatterY = 0;
 
-      if (scatterBoth) {
-        scatterAngle = this.random.nextRange(0, 360) * (Math.PI / 180);
-      } else {
-        // Perpendicular to stroke
-        scatterAngle = (strokeAngle + 90 + (this.random.next() > 0.5 ? 0 : 180)) * (Math.PI / 180);
+      if (scatter > 0) {
+        const scatterDistance = scatter * this.config.baseSize * 2 * this.random.next();
+        let scatterAngle: number;
+
+        if (scatterBoth) {
+          scatterAngle = this.random.nextRange(0, 360) * (Math.PI / 180);
+        } else {
+          // Perpendicular to stroke (strokeAngle is in degrees)
+          // Add 90 degrees (+/- 180 random)
+          const side = this.random.next() > 0.5 ? 90 : -90;
+          scatterAngle = (strokeAngle + side) * (Math.PI / 180);
+        }
+
+        scatterX = Math.cos(scatterAngle) * scatterDistance;
+        scatterY = Math.sin(scatterAngle) * scatterDistance;
       }
 
-      const scatterOffset: Point2D = {
-        x: Math.cos(scatterAngle) * scatterDistance,
-        y: Math.sin(scatterAngle) * scatterDistance,
-      };
-
       const stamp = this.createStamp(
-        x + scatterOffset.x,
-        y + scatterOffset.y,
+        x + scatterX,
+        y + scatterY,
         pressure,
         strokeAngle,
-        scatterOffset
+        { x: scatterX, y: scatterY }
       );
       stamps.push(stamp);
     }
@@ -212,13 +250,16 @@ export class BrushEngine implements IAlchemyBrush {
     const { sizeJitter, rotationJitter, rotation, rotateToStroke, flow, roundness, hardness } = this.config;
 
     // Apply size jitter
-    const jitterMult = 1 - sizeJitter * this.random.next();
-    const baseSize = this.config.baseSize * this.config.pressureSizeCurve(pressure);
+    const jitterMult = sizeJitter > 0 ? 1 - sizeJitter * this.random.next() : 1;
+    const pressureSize = this.config.pressureSizeCurve(pressure);
+    const baseSize = this.config.baseSize * pressureSize;
     const size = Math.max(1, baseSize * jitterMult);
 
-    // Apply flow to opacity
-    const baseOpacity = this.config.pressureOpacityCurve(pressure);
-    const opacity = baseOpacity * flow;
+    // Apply flow to opacity (pressure * flow)
+    const pressureOpacity = this.config.pressureOpacityCurve(pressure);
+    // Flow acts as a multiplier on top of pressure opacity, and also accumulation density
+    // For simple stamp engine, multiplying opacity is a good approximation
+    const opacity = Math.max(0, Math.min(1, pressureOpacity * flow));
 
     // Calculate rotation
     let stampRotation = rotation;
@@ -233,15 +274,10 @@ export class BrushEngine implements IAlchemyBrush {
       position: { x, y },
       size,
       opacity,
-      color: {
-        r: this.config.color.r,
-        g: this.config.color.g,
-        b: this.config.color.b,
-        a: Math.round(this.config.color.a * opacity),
-      },
+      color: { ...this.config.color }, // Color is handled at render time usually, but storing here
       rotation: stampRotation,
-      roundness,
-      hardness,
+      roundness: roundness ?? 1,
+      hardness: hardness ?? 1,
       scatterOffset,
     };
   }

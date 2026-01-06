@@ -133,3 +133,86 @@ export interface GestureData {
   angle?: number;
   displacement?: Point2D;
 }
+
+export interface SerializedLayer {
+  id: string;
+  name: string;
+  visible: boolean;
+  locked: boolean;
+  alphaLocked: boolean;
+  opacity: number;
+  blendMode: BlendMode;
+  zIndex: number;
+  createdAt: number;
+}
+
+export interface SerializedStroke {
+  id: string;
+  layerId: string;
+  points: InputPoint[];
+  color: Color;
+  size: number;
+  timestamp: number;
+  duration: number;
+}
+
+export interface SerializedFill {
+  id: string;
+  layerId: string;
+  width: number;
+  height: number;
+  timestamp: number;
+  pixels: string;
+}
+
+export interface FillRecord {
+  id: string;
+  layerId: string;
+  width: number;
+  height: number;
+  pixels: Uint8Array;
+  timestamp: number;
+}
+
+export interface SelectionState {
+  basePolygon: Point2D[];
+  transformedPolygon: Point2D[];
+  baseCenter: Point2D;
+  center: Point2D;
+  bounds: { minX: number; minY: number; maxX: number; maxY: number };
+  selectedStrokeIds: string[];
+  transform: { tx: number; ty: number; scale: number; rotation: number };
+}
+
+export interface ProjectData {
+  version: 1;
+  exportedAt: number;
+  canvas: {
+    id: string;
+    width: number;
+    height: number;
+    backgroundColor: Color;
+    layers: SerializedLayer[];
+    activeLayerId: string;
+    referenceLayerId?: string | null;
+    createdAt: number;
+    modifiedAt: number;
+  };
+  strokes: SerializedStroke[];
+  fills: SerializedFill[];
+  view: {
+    zoom: number;
+    pan: Point2D;
+    rotation: number;
+  };
+  grid: {
+    visible: boolean;
+    spacing: number;
+    color: Color;
+  };
+  brush: {
+    size: number;
+    color: Color;
+    stabilization: number;
+  };
+}

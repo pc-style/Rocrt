@@ -2,8 +2,7 @@ import type { CanvasKit, Surface, Canvas, Path, Image as SkImage } from 'canvask
 import CanvasKitInit from 'canvaskit-wasm';
 import { BlendMode } from '../core/types';
 import type { Color, InputPoint, Stroke, Point2D } from '../core/types';
-import { CANVAS_DEFAULTS, GRID_DEFAULTS, TILE_SIZE } from '../core/config';
-import { SkiaTileManager } from './skia-tile-manager';
+import { CANVAS_DEFAULTS, GRID_DEFAULTS } from '../core/config';
 
 interface StrokeData {
   path: Path;
@@ -12,6 +11,8 @@ interface StrokeData {
   layerId: string;
   strokeId: string;
   timestamp: number;
+  isEraser?: boolean;
+  hardness?: number;
 }
 
 interface FillData {
@@ -33,7 +34,6 @@ export class SkiaRenderer {
   private layerVisibility: Map<string, boolean> = new Map();
   private layerOpacity: Map<string, number> = new Map();
   private layerBlendModes: Map<string, BlendMode> = new Map();
-  private layerTiles: Map<string, SkiaTileManager> = new Map();
   private layerOrder: string[] = [];
 
   // Store completed strokes with their paint settings
@@ -55,6 +55,11 @@ export class SkiaRenderer {
   private viewRotation: number = 0;
   private eraserMode: boolean = false;
 
+  /**
+   * Initializes the Skia renderer with CanvasKit.
+   * @param canvasId - The HTML canvas element ID to render to
+   * @throws Error if canvas element not found or surface creation fails
+   */
   async init(canvasId: string): Promise<void> {
     this.ck = await CanvasKitInit({
       locateFile: (file: string) => `https://unpkg.com/canvaskit-wasm@0.40.0/bin/${file}`,
@@ -77,18 +82,23 @@ export class SkiaRenderer {
     this.render();
   }
 
+  /**
+   * Registers a layer with visibility and blend settings.
+   * @param layerId - Unique layer identifier
+   * @param visible - Initial visibility state
+   * @param opacity - Layer opacity (0-1)
+   * @param blendMode - Porter-Duff blend mode
+   */
   registerLayer(layerId: string, visible: boolean = true, opacity: number = 1, blendMode: BlendMode = BlendMode.Normal): void {
     this.layerVisibility.set(layerId, visible);
     this.layerOpacity.set(layerId, Math.max(0, Math.min(1, opacity)));
     this.layerBlendModes.set(layerId, blendMode);
-    if (!this.layerTiles.has(layerId) && this.ck) {
-      this.layerTiles.set(layerId, new SkiaTileManager(this.ck));
-    }
     if (!this.layerOrder.includes(layerId)) {
       this.layerOrder.push(layerId);
     }
   }
 
+  /** Resizes the canvas and recreates the surface to match display size. */
   resizeToDisplaySize(): void {
     if (!this.ck || !this.canvasElement) return;
     const didResize = this.resizeCanvasToDisplaySize();
@@ -280,9 +290,6 @@ export class SkiaRenderer {
     if (!this.layerBlendModes.has(layerId)) {
       this.layerBlendModes.set(layerId, BlendMode.Normal);
     }
-    if (!this.layerTiles.has(layerId) && this.ck) {
-      this.layerTiles.set(layerId, new SkiaTileManager(this.ck));
-    }
   }
 
   private isLayerVisible(layerId: string): boolean {
@@ -337,6 +344,11 @@ export class SkiaRenderer {
     this.eraserMode = active;
   }
 
+  /**
+   * Begins a new stroke at the given point.
+   * @param point - Starting input point with coordinates and pressure
+   * @param layerId - Target layer for the stroke
+   */
   beginStroke(point: InputPoint, layerId: string): void {
     if (!this.ck) return;
 
@@ -347,6 +359,7 @@ export class SkiaRenderer {
     this.currentStrokePoints = [point];
   }
 
+  /** Continues the current stroke to the given point. */
   continueStroke(point: InputPoint): void {
     if (!this.currentPath) return;
     const previous = this.currentStrokePoints[this.currentStrokePoints.length - 1];
@@ -365,6 +378,10 @@ export class SkiaRenderer {
     this.render();
   }
 
+  /**
+   * Ends the current stroke and returns the completed stroke data.
+   * @returns The completed Stroke object, or null if no stroke was in progress
+   */
   endStroke(): Stroke | null {
     if (!this.currentPath) return null;
 
@@ -381,13 +398,13 @@ export class SkiaRenderer {
       layerId: this.currentLayerId,
       strokeId,
       timestamp: Date.now(),
+      isEraser: this.eraserMode,
+      // Default hardness to 1 if not available (ideally should come from brush config)
+      hardness: 1,
     };
 
     // Store the stroke with its current paint settings
     this.completedStrokes.push(strokeData);
-
-    // Bake high-performance tiles
-    this.bakeStrokeToTiles(strokeData);
 
     const stroke: Stroke = {
       id: strokeId,
@@ -429,68 +446,34 @@ export class SkiaRenderer {
     return stroke;
   }
 
-  private bakeStrokeToTiles(stroke: StrokeData): void {
-    const tileMgr = this.layerTiles.get(stroke.layerId);
-    if (!tileMgr || !this.ck) return;
 
-    // Determine intersecting tiles (approximation based on path bounds)
-    const bounds = stroke.path.getBounds();
-    const margin = stroke.width / 2 + 2;
-    // Skia Rect is [left, top, right, bottom]
-    const minGridX = Math.floor((bounds[0]! - margin) / TILE_SIZE);
-    const maxGridX = Math.floor((bounds[2]! + margin) / TILE_SIZE);
-    const minGridY = Math.floor((bounds[1]! - margin) / TILE_SIZE);
-    const maxGridY = Math.floor((bounds[3]! + margin) / TILE_SIZE);
 
-    const paint = this.createPaint(stroke.color, stroke.width, 1);
-    if (!paint) return;
-
-    for (let gx = minGridX; gx <= maxGridX; gx++) {
-      for (let gy = minGridY; gy <= maxGridY; gy++) {
-        tileMgr.bakeIntoTile(gx, gy, (canvas) => {
-          canvas.drawPath(stroke.path, paint);
-        });
-      }
-    }
-    paint.delete();
-  }
-
-  private reBakeLayer(layerId: string): void {
-    const tileMgr = this.layerTiles.get(layerId);
-    if (!tileMgr) return;
-
-    tileMgr.clear();
-    const strokes = this.completedStrokes.filter(s => s.layerId === layerId);
-    const fills = this.completedFills.filter(f => f.layerId === layerId);
-
-    // Re-bake all items in chronological order
-    const items = [
-      ...strokes.map(s => ({ type: 'stroke' as const, data: s, timestamp: s.timestamp })),
-      ...fills.map(f => ({ type: 'fill' as const, data: f, timestamp: f.timestamp }))
-    ].sort((a, b) => a.timestamp - b.timestamp);
-
-    for (const item of items) {
-      if (item.type === 'stroke') {
-        this.bakeStrokeToTiles(item.data as StrokeData);
-      } else {
-        // For fills, we can optimize by making it a special drawing command
-        const fill = item.data as FillData;
-        const gxStart = 0;
-        const gyStart = 0;
-        const gxEnd = Math.floor(fill.width / TILE_SIZE);
-        const gyEnd = Math.floor(fill.height / TILE_SIZE);
-        for (let gx = gxStart; gx <= gxEnd; gx++) {
-          for (let gy = gyStart; gy <= gyEnd; gy++) {
-            tileMgr.bakeIntoTile(gx, gy, (canvas) => {
-              canvas.drawImage(fill.image, 0, 0, null);
-            });
-          }
-        }
-      }
+  /**
+   * Maps app BlendMode to Skia BlendMode.
+   * @param blendMode - App blend mode enum value
+   * @returns Corresponding CanvasKit blend mode
+   */
+  private mapBlendMode(blendMode: BlendMode): unknown {
+    if (!this.ck) return null;
+    switch (blendMode) {
+      case BlendMode.Normal: return this.ck.BlendMode.SrcOver;
+      case BlendMode.Multiply: return this.ck.BlendMode.Multiply;
+      case BlendMode.Screen: return this.ck.BlendMode.Screen;
+      case BlendMode.Overlay: return this.ck.BlendMode.Overlay;
+      case BlendMode.Darken: return this.ck.BlendMode.Darken;
+      case BlendMode.Lighten: return this.ck.BlendMode.Lighten;
+      case BlendMode.ColorDodge: return this.ck.BlendMode.ColorDodge;
+      case BlendMode.ColorBurn: return this.ck.BlendMode.ColorBurn;
+      case BlendMode.HardLight: return this.ck.BlendMode.HardLight;
+      case BlendMode.SoftLight: return this.ck.BlendMode.SoftLight;
+      case BlendMode.Difference: return this.ck.BlendMode.Difference;
+      case BlendMode.Exclusion: return this.ck.BlendMode.Exclusion;
+      default: return this.ck.BlendMode.SrcOver;
     }
   }
 
-  private createPaint(color: Color, width: number, opacity: number) {
+  /** Creates a Skia Paint object configured for stroke rendering. */
+  private createPaint(color: Color, width: number, opacity: number, isEraser: boolean = false, hardness: number = 1) {
     if (!this.ck) return null;
 
     const paint = new this.ck.Paint();
@@ -500,7 +483,25 @@ export class SkiaRenderer {
     paint.setStrokeJoin(this.ck.StrokeJoin.Round);
     paint.setStrokeWidth(Math.max(0.1, width));
 
-    if (this.eraserMode) {
+    // Apply hardness (softness) via Blur MaskFilter
+    if (hardness < 0.98) {
+      // Sigma calculation: roughly map [0,1] hardness to [size/2, 0] blur sigma
+      // Hardness 1 = 0 blur
+      // Hardness 0 = size/2 blur (very soft)
+      const sigma = (width / 2) * (1 - hardness);
+      if (sigma > 0) {
+        const maskFilter = this.ck.MaskFilter.MakeBlur(
+          // Use ToBlurStyle to ensure we get the correct enum value
+          this.ck.BlurStyle.Normal,
+          sigma,
+          false
+        );
+        paint.setMaskFilter(maskFilter);
+        maskFilter.delete();
+      }
+    }
+
+    if (isEraser) {
       // Eraser: use Clear blend mode to erase pixels
       paint.setBlendMode(this.ck.BlendMode.Clear);
       paint.setColor(this.ck.Color4f(0, 0, 0, 1));
@@ -550,74 +551,65 @@ export class SkiaRenderer {
       }
     }
 
-    // Draw layers from tiles (High Performance)
-    const orderedLayers = this.layerOrder.length > 0 ? this.layerOrder : Array.from(this.layerTiles.keys());
+    // Draw layers (Vector Rendering)
+    const orderedLayers = this.layerOrder.length > 0 ? this.layerOrder : Array.from(this.layerVisibility.keys());
 
     for (const layerId of orderedLayers) {
       if (!this.isLayerVisible(layerId)) continue;
       const opacity = this.getLayerOpacity(layerId);
       const blendMode = this.layerBlendModes.get(layerId) ?? BlendMode.Normal;
-      const tileMgr = this.layerTiles.get(layerId);
-      if (!tileMgr) continue;
 
       const layerPaint = new this.ck.Paint();
       layerPaint.setAlphaf(opacity);
 
       // Apply Porter-Duff blend mode
-      if (this.ck) {
-        let skBlendMode = this.ck.BlendMode.SrcOver;
-        switch (blendMode) {
-          case BlendMode.Normal: skBlendMode = this.ck.BlendMode.SrcOver; break;
-          case BlendMode.Multiply: skBlendMode = this.ck.BlendMode.Multiply; break;
-          case BlendMode.Screen: skBlendMode = this.ck.BlendMode.Screen; break;
-          case BlendMode.Overlay: skBlendMode = this.ck.BlendMode.Overlay; break;
-          case BlendMode.Darken: skBlendMode = this.ck.BlendMode.Darken; break;
-          case BlendMode.Lighten: skBlendMode = this.ck.BlendMode.Lighten; break;
-          case BlendMode.ColorDodge: skBlendMode = this.ck.BlendMode.ColorDodge; break;
-          case BlendMode.ColorBurn: skBlendMode = this.ck.BlendMode.ColorBurn; break;
-          case BlendMode.HardLight: skBlendMode = this.ck.BlendMode.HardLight; break;
-          case BlendMode.SoftLight: skBlendMode = this.ck.BlendMode.SoftLight; break;
-          case BlendMode.Difference: skBlendMode = this.ck.BlendMode.Difference; break;
-          case BlendMode.Exclusion: skBlendMode = this.ck.BlendMode.Exclusion; break;
-        }
-        layerPaint.setBlendMode(skBlendMode);
-      }
+      const skBlendMode = this.mapBlendMode(blendMode);
+      if (skBlendMode) layerPaint.setBlendMode(skBlendMode as any);
 
-      // Use advanced filtering (Bicubic) when zoomed in or out significantly
-      const useBicubic = this.viewZoom > 2.0 || this.viewZoom < 0.5;
+      // Use saveLayer to apply opacity and blend mode to the whole layer content
+      this.canvas.saveLayer(layerPaint);
 
-      for (const tile of tileMgr.getTiles()) {
-        if (!tile.image) continue;
+      // Draw all items for this layer
+      const layerStrokes = this.completedStrokes.filter(s => s.layerId === layerId);
+      const layerFills = this.completedFills.filter(f => f.layerId === layerId);
+      const items = [
+        ...layerStrokes.map(s => ({ type: 'stroke' as const, data: s, timestamp: s.timestamp })),
+        ...layerFills.map(f => ({ type: 'fill' as const, data: f, timestamp: f.timestamp }))
+      ].sort((a, b) => a.timestamp - b.timestamp);
 
-        const x = tile.gridX * TILE_SIZE;
-        const y = tile.gridY * TILE_SIZE;
-
-        if (useBicubic) {
-          // Bicubic interpolation for smoother results (Mitchell-Netravali)
-          this.canvas.drawImageCubic(
-            tile.image,
-            x, y,
-            1 / 3, 1 / 3, // B and C parameters for Mitchell-Netravali filter
-            layerPaint
-          );
+      for (const item of items) {
+        if (item.type === 'stroke') {
+          const stroke = item.data as StrokeData;
+          const strokePaint = this.createPaint(stroke.color, stroke.width, 1, stroke.isEraser, stroke.hardness);
+          if (strokePaint) {
+            this.canvas.drawPath(stroke.path, strokePaint);
+            strokePaint.delete();
+          }
         } else {
-          // Standard linear interpolation for performance
-          this.canvas.drawImageOptions(
-            tile.image,
-            x, y,
-            this.ck.FilterMode.Linear,
-            this.ck.MipmapMode.None,
-            layerPaint
-          );
+          const fill = item.data as FillData;
+          this.canvas.drawImage(fill.image, 0, 0, null);
         }
       }
+
+      // Draw current stroke if it belongs to this layer
+      if (this.currentPath && this.currentLayerId === layerId) {
+        const currentStrokePaint = this.createPaint(this.currentColor, this.currentWidth, 1);
+        if (currentStrokePaint) {
+          this.canvas.drawPath(this.currentPath, currentStrokePaint);
+          currentStrokePaint.delete();
+        }
+      }
+
+      this.canvas.restore();
       layerPaint.delete();
     }
 
     // Draw current stroke in progress with current settings
     if (this.currentPath && this.isLayerVisible(this.currentLayerId)) {
       const opacity = this.getLayerOpacity(this.currentLayerId);
-      const paint = this.createPaint(this.currentColor, this.currentWidth, opacity);
+      // Hardness should ideally come from current brush config
+      const hardness = 1;
+      const paint = this.createPaint(this.currentColor, this.currentWidth, opacity, this.eraserMode, hardness);
       if (paint) {
         this.canvas.drawPath(this.currentPath, paint);
         paint.delete();
@@ -628,34 +620,32 @@ export class SkiaRenderer {
     this.surface.flush();
   }
 
+  /** Sets visibility for a layer. */
   setLayerVisibility(layerId: string, visible: boolean): void {
     this.ensureLayerState(layerId);
     this.layerVisibility.set(layerId, visible);
     this.render();
   }
 
+  /** Sets opacity for a layer (0-1). */
   setLayerOpacity(layerId: string, opacity: number): void {
     this.ensureLayerState(layerId);
     this.layerOpacity.set(layerId, Math.max(0, Math.min(1, opacity)));
     this.render();
   }
 
+  /** Sets blend mode for a layer. */
   setLayerBlendMode(layerId: string, blendMode: BlendMode): void {
     this.ensureLayerState(layerId);
     this.layerBlendModes.set(layerId, blendMode);
     this.render();
   }
 
+  /** Removes a layer and all its strokes/fills. */
   removeLayer(layerId: string): void {
     this.layerVisibility.delete(layerId);
     this.layerOpacity.delete(layerId);
     this.layerOrder = this.layerOrder.filter((id) => id !== layerId);
-
-    const tileMgr = this.layerTiles.get(layerId);
-    if (tileMgr) {
-      tileMgr.dispose();
-      this.layerTiles.delete(layerId);
-    }
 
     this.completedStrokes = this.completedStrokes.filter((stroke) => {
       if (stroke.layerId === layerId) {
@@ -681,15 +671,12 @@ export class SkiaRenderer {
     this.render();
   }
 
+  /** Undoes a stroke by ID, removing it from the layer. */
   undoStroke(strokeId: string): void {
     const index = this.completedStrokes.findIndex(s => s.strokeId === strokeId);
     if (index !== -1) {
-      const layerId = this.completedStrokes[index]!.layerId;
       this.completedStrokes[index]!.path.delete();
       this.completedStrokes.splice(index, 1);
-
-      // Full re-bake required for undo to maintain pixel integrity
-      this.reBakeLayer(layerId);
       this.render();
     }
   }
@@ -716,24 +703,6 @@ export class SkiaRenderer {
       height,
     };
     this.completedFills.push(fillData);
-
-    // Optimized bake: Only bake this fill into tiles without clearing everything
-    const tileMgr = this.layerTiles.get(layerId);
-    if (tileMgr) {
-      const gxEnd = Math.floor((width - 1) / TILE_SIZE);
-      const gyEnd = Math.floor((height - 1) / TILE_SIZE);
-
-      for (let gy = 0; gy <= gyEnd; gy++) {
-        for (let gx = 0; gx <= gxEnd; gx++) {
-          tileMgr.bakeIntoTile(gx, gy, (tileCanvas) => {
-            if (tileCanvas) {
-              tileCanvas.drawImage(image, 0, 0, null);
-            }
-          });
-        }
-      }
-    }
-
     this.render();
     return true;
   }
@@ -741,10 +710,8 @@ export class SkiaRenderer {
   removeFill(fillId: string): void {
     const index = this.completedFills.findIndex((fill) => fill.fillId === fillId);
     if (index === -1) return;
-    const layerId = this.completedFills[index]!.layerId;
     this.completedFills[index]!.image.delete();
     this.completedFills.splice(index, 1);
-    this.reBakeLayer(layerId);
     this.render();
   }
 
@@ -758,8 +725,6 @@ export class SkiaRenderer {
 
   getLayerPixels(layerId: string, width: number, height: number): Uint8Array | null {
     if (!this.ck) return null;
-    const tileMgr = this.layerTiles.get(layerId);
-    if (!tileMgr) return null;
 
     const surface = this.ck.MakeSurface(width, height);
     if (!surface) return null;
@@ -770,10 +735,25 @@ export class SkiaRenderer {
     const paint = new this.ck.Paint();
     paint.setAlphaf(opacity);
 
-    // Composite from tiles
-    for (const tile of tileMgr.getTiles()) {
-      if (tile.image) {
-        canvas.drawImage(tile.image, tile.gridX * TILE_SIZE, tile.gridY * TILE_SIZE, paint);
+    // Draw all items for this layer
+    const layerStrokes = this.completedStrokes.filter(s => s.layerId === layerId);
+    const layerFills = this.completedFills.filter(f => f.layerId === layerId);
+    const items = [
+      ...layerStrokes.map(s => ({ type: 'stroke' as const, data: s, timestamp: s.timestamp })),
+      ...layerFills.map(f => ({ type: 'fill' as const, data: f, timestamp: f.timestamp }))
+    ].sort((a, b) => a.timestamp - b.timestamp);
+
+    for (const item of items) {
+      if (item.type === 'stroke') {
+        const stroke = item.data as StrokeData;
+        const strokePaint = this.createPaint(stroke.color, stroke.width, 1, stroke.isEraser, stroke.hardness);
+        if (strokePaint) {
+          canvas.drawPath(stroke.path, strokePaint);
+          strokePaint.delete();
+        }
+      } else {
+        const fill = item.data as FillData;
+        canvas.drawImage(fill.image, 0, 0, null);
       }
     }
     paint.delete();
@@ -808,17 +788,33 @@ export class SkiaRenderer {
     for (const layerId of this.layerOrder) {
       if (!this.isLayerVisible(layerId)) continue;
       const opacity = this.getLayerOpacity(layerId);
-      const tileMgr = this.layerTiles.get(layerId);
-      if (!tileMgr) continue;
-
       const paint = new this.ck.Paint();
       paint.setAlphaf(opacity);
 
-      for (const tile of tileMgr.getTiles()) {
-        if (tile.image) {
-          canvas.drawImage(tile.image, tile.gridX * TILE_SIZE, tile.gridY * TILE_SIZE, paint);
+      canvas.saveLayer(paint);
+
+      const layerStrokes = this.completedStrokes.filter(s => s.layerId === layerId);
+      const layerFills = this.completedFills.filter(f => f.layerId === layerId);
+      const items = [
+        ...layerStrokes.map(s => ({ type: 'stroke' as const, data: s, timestamp: s.timestamp })),
+        ...layerFills.map(f => ({ type: 'fill' as const, data: f, timestamp: f.timestamp }))
+      ].sort((a, b) => a.timestamp - b.timestamp);
+
+      for (const item of items) {
+        if (item.type === 'stroke') {
+          const stroke = item.data as StrokeData;
+          const strokePaint = this.createPaint(stroke.color, stroke.width, 1, stroke.isEraser, stroke.hardness);
+          if (strokePaint) {
+            canvas.drawPath(stroke.path, strokePaint);
+            strokePaint.delete();
+          }
+        } else {
+          const fill = item.data as FillData;
+          canvas.drawImage(fill.image, 0, 0, null);
         }
       }
+
+      canvas.restore();
       paint.delete();
     }
 
@@ -857,7 +853,6 @@ export class SkiaRenderer {
     };
 
     this.completedStrokes.push(strokeData);
-    this.bakeStrokeToTiles(strokeData);
     this.render();
   }
 
@@ -869,13 +864,11 @@ export class SkiaRenderer {
     const path = this.buildPath(points);
     if (!path) return;
 
-    const layerId = this.completedStrokes[index]!.layerId;
     this.completedStrokes[index]!.path.delete();
     this.completedStrokes[index] = {
       ...this.completedStrokes[index]!,
       path,
     };
-    this.reBakeLayer(layerId);
     this.render();
   }
 
@@ -928,9 +921,7 @@ export class SkiaRenderer {
     }
     this.completedFills = [];
 
-    for (const tileMgr of this.layerTiles.values()) {
-      tileMgr.clear();
-    }
+
 
     if (this.currentPath) {
       this.currentPath.delete();
@@ -988,10 +979,6 @@ export class SkiaRenderer {
       this.surface = null;
     }
 
-    for (const tileMgr of this.layerTiles.values()) {
-      tileMgr.dispose();
-    }
-    this.layerTiles.clear();
     this.layerVisibility.clear();
     this.layerOpacity.clear();
     this.layerOrder = [];
