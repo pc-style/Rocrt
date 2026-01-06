@@ -607,8 +607,22 @@ export class SkiaRenderer {
     };
     this.completedFills.push(fillData);
 
-    // Bake into tiles
-    this.reBakeLayer(layerId);
+    // Optimized bake: Only bake this fill into tiles without clearing everything
+    const tileMgr = this.layerTiles.get(layerId);
+    if (tileMgr) {
+      const gxEnd = Math.floor((width - 1) / TILE_SIZE);
+      const gyEnd = Math.floor((height - 1) / TILE_SIZE);
+
+      for (let gy = 0; gy <= gyEnd; gy++) {
+        for (let gx = 0; gx <= gxEnd; gx++) {
+          tileMgr.bakeIntoTile(gx, gy, (tileCanvas) => {
+            if (tileCanvas) {
+              tileCanvas.drawImage(image, 0, 0, null);
+            }
+          });
+        }
+      }
+    }
 
     this.render();
     return true;
@@ -634,44 +648,25 @@ export class SkiaRenderer {
 
   getLayerPixels(layerId: string, width: number, height: number): Uint8Array | null {
     if (!this.ck) return null;
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = width;
-    tempCanvas.height = height;
-    const surface = this.ck.MakeCanvasSurface(tempCanvas);
+    const tileMgr = this.layerTiles.get(layerId);
+    if (!tileMgr) return null;
+
+    const surface = this.ck.MakeSurface(width, height);
     if (!surface) return null;
     const canvas = surface.getCanvas();
     canvas.clear(this.ck.Color4f(0, 0, 0, 0));
 
     const opacity = this.getLayerOpacity(layerId);
-    const items: Array<{ kind: 'stroke' | 'fill'; timestamp: number; stroke?: StrokeData; fill?: FillData }> = [];
-    for (const stroke of this.completedStrokes) {
-      if (stroke.layerId !== layerId) continue;
-      items.push({ kind: 'stroke', timestamp: stroke.timestamp, stroke });
-    }
-    for (const fill of this.completedFills) {
-      if (fill.layerId !== layerId) continue;
-      items.push({ kind: 'fill', timestamp: fill.timestamp, fill });
-    }
-    items.sort((a, b) => a.timestamp - b.timestamp);
-    for (const item of items) {
-      if (item.kind === 'stroke' && item.stroke) {
-        const paint = this.createPaint(item.stroke.color, item.stroke.width, opacity);
-        if (paint) {
-          canvas.drawPath(item.stroke.path, paint);
-          paint.delete();
-        }
-      } else if (item.kind === 'fill' && item.fill) {
-        const paint = new this.ck.Paint();
-        paint.setAlphaf(Math.max(0, Math.min(1, opacity)));
-        canvas.drawImageRect(
-          item.fill.image,
-          this.ck.XYWHRect(0, 0, item.fill.width, item.fill.height),
-          this.ck.XYWHRect(0, 0, item.fill.width, item.fill.height),
-          paint
-        );
-        paint.delete();
+    const paint = new this.ck.Paint();
+    paint.setAlphaf(opacity);
+
+    // Composite from tiles
+    for (const tile of tileMgr.getTiles()) {
+      if (tile.image) {
+        canvas.drawImage(tile.image, tile.gridX * TILE_SIZE, tile.gridY * TILE_SIZE, paint);
       }
     }
+    paint.delete();
 
     surface.flush();
     const snapshot = surface.makeImageSnapshot();
@@ -687,6 +682,49 @@ export class SkiaRenderer {
     surface.delete();
     if (!pixels) return null;
     return new Uint8Array(pixels);
+  }
+
+  getComposedPixels(width: number, height: number): Uint8Array | null {
+    if (!this.ck) return null;
+
+    const surface = this.ck.MakeSurface(width, height);
+    if (!surface) return null;
+    const canvas = surface.getCanvas();
+
+    // Clear with background color
+    const bg = this.currentBackground;
+    canvas.clear(this.ck.Color4f(bg.r / 255, bg.g / 255, bg.b / 255, bg.a / 255));
+
+    for (const layerId of this.layerOrder) {
+      if (!this.isLayerVisible(layerId)) continue;
+      const opacity = this.getLayerOpacity(layerId);
+      const tileMgr = this.layerTiles.get(layerId);
+      if (!tileMgr) continue;
+
+      const paint = new this.ck.Paint();
+      paint.setAlphaf(opacity);
+
+      for (const tile of tileMgr.getTiles()) {
+        if (tile.image) {
+          canvas.drawImage(tile.image, tile.gridX * TILE_SIZE, tile.gridY * TILE_SIZE, paint);
+        }
+      }
+      paint.delete();
+    }
+
+    surface.flush();
+    const snapshot = surface.makeImageSnapshot();
+    const imageInfo = {
+      width,
+      height,
+      colorType: this.ck.ColorType.RGBA_8888,
+      alphaType: this.ck.AlphaType.Premul,
+      colorSpace: this.ck.ColorSpace.SRGB,
+    };
+    const pixels = snapshot.readPixels(0, 0, imageInfo, undefined, width * 4);
+    snapshot.delete();
+    surface.delete();
+    return pixels ? new Uint8Array(pixels) : null;
   }
 
   replayStroke(stroke: Stroke): void {

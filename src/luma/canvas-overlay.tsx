@@ -38,6 +38,7 @@ interface AppState {
   timelapseSupported: boolean;
   colorDropActive: boolean;
   colorDropThreshold: number;
+  colorDropDragging: boolean;
   lassoActive: boolean;
   selectionActive: boolean;
 }
@@ -1365,6 +1366,7 @@ export function CanvasOverlay() {
     timelapseSupported: true,
     colorDropActive: false,
     colorDropThreshold: 0.15,
+    colorDropDragging: false,
     lassoActive: false,
     selectionActive: false,
   });
@@ -1510,6 +1512,10 @@ export function CanvasOverlay() {
       setState((s) => ({ ...s, colorDropThreshold: Math.max(0, Math.min(1, value)) }));
     });
 
+    const colorDropDraggingSub = eventBus.on(Events.COLOR_DROP_DRAGGING_CHANGED, (value: boolean) => {
+      setState((s) => ({ ...s, colorDropDragging: value }));
+    });
+
     const lassoSub = eventBus.on(Events.LASSO_TOGGLED, (data?: { active?: boolean }) => {
       const active = data?.active;
       if (active === undefined) {
@@ -1563,6 +1569,7 @@ export function CanvasOverlay() {
       timelapseSub.unsubscribe();
       colorDropSub.unsubscribe();
       colorDropThresholdSub.unsubscribe();
+      colorDropDraggingSub.unsubscribe();
       lassoSub.unsubscribe();
       selectionSub.unsubscribe();
       uiSub.unsubscribe();
@@ -1842,6 +1849,47 @@ export function CanvasOverlay() {
               pointerEvents: 'auto',
             }}>
               Read-only
+            </div>
+          )}
+          {state.colorDropDragging && (
+            <div style={{
+              position: 'absolute',
+              top: '0',
+              left: '0',
+              width: '100%',
+              height: '4px',
+              background: 'rgba(0,0,0,0.3)',
+              zIndex: 1000,
+              pointerEvents: 'none',
+            }}>
+              <div style={{
+                position: 'absolute',
+                top: '0',
+                left: '0',
+                height: '100%',
+                width: `${state.colorDropThreshold * 100}%`,
+                background: `rgb(${state.brushColor.r}, ${state.brushColor.g}, ${state.brushColor.b})`,
+                boxShadow: '0 0 8px rgba(255,255,255,0.5)',
+                transition: 'width 0.05s ease-out',
+              }} />
+              <div style={{
+                position: 'absolute',
+                top: '12px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                background: 'rgba(20,20,20,0.85)',
+                color: '#fff',
+                padding: '6px 16px',
+                borderRadius: '20px',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                letterSpacing: '0.05em',
+                boxShadow: '0 4px 15px rgba(0,0,0,0.6)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                textShadow: '0 1px 2px rgba(0,0,0,0.8)',
+              }}>
+                COLOR DROP THRESHOLD: {Math.round(state.colorDropThreshold * 100)}%
+              </div>
             </div>
           )}
         </>

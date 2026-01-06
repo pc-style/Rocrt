@@ -248,6 +248,7 @@ class OpenCanvasApp {
           this.colorDropActive = false;
           this.colorDropDragging = false;
           this.colorDropSeed = null;
+          eventBus.emit(Events.COLOR_DROP_DRAGGING_CHANGED, false);
           eventBus.emit(Events.COLOR_DROP_TOGGLED, { active: false });
         }
         if (this.eyedropperActive) {
@@ -372,13 +373,13 @@ class OpenCanvasApp {
       window.addEventListener('keyup', this.handleKeyUp);
       window.addEventListener('blur', this.handleBlur);
       window.addEventListener('resize', this.handleResize);
-      
+
       // Emit initial layer state
       this.emitLayerUpdate();
       window.setTimeout(() => {
         this.emitLayerUpdate();
       }, 0);
-      
+
       console.log('OpenCanvas initialized with CanvasKit (Skia)');
     } catch (error) {
       console.error('Failed to initialize OpenCanvas:', error);
@@ -443,6 +444,7 @@ class OpenCanvasApp {
         this.colorDropSeed = { ...point, x: mapped.x, y: mapped.y };
         this.colorDropStartX = point.x;
         this.colorDropDragging = true;
+        eventBus.emit(Events.COLOR_DROP_DRAGGING_CHANGED, true);
         eventBus.emit(Events.COLOR_DROP_THRESHOLD_CHANGED, this.colorDropThreshold);
         return;
       }
@@ -535,6 +537,7 @@ class OpenCanvasApp {
       if (this.colorDropDragging) {
         const seed = this.colorDropSeed;
         this.colorDropDragging = false;
+        eventBus.emit(Events.COLOR_DROP_DRAGGING_CHANGED, false);
         this.colorDropSeed = null;
         if (seed && !this.isReadOnly) {
           this.performColorDrop(seed, this.colorDropThreshold);

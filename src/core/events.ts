@@ -114,6 +114,7 @@ export const Events = {
   TIMELAPSE_STATUS_CHANGED: 'chronos:timelapse-status-changed',
   COLOR_DROP_TOGGLED: 'alchemy:color-drop-toggled',
   COLOR_DROP_THRESHOLD_CHANGED: 'alchemy:color-drop-threshold-changed',
+  COLOR_DROP_DRAGGING_CHANGED: 'alchemy:color-drop-dragging-changed',
   LASSO_TOGGLED: 'luma:lasso-toggled',
   SELECTION_UPDATED: 'luma:selection-updated',
   UI_TOGGLED: 'luma:ui-toggled',
