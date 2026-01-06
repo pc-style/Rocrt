@@ -133,4 +133,6 @@ export const Events = {
   UNDO_EXECUTED: 'chronos:undo-executed',
   REDO_EXECUTED: 'chronos:redo-executed',
   HISTORY_STATE_CHANGED: 'chronos:history-state-changed',
+  ERASER_TOGGLED: 'luma:eraser-toggled',
+  TRANSFORM_MODE_TOGGLED: 'luma:transform-mode-toggled',
 } as const;

@@ -5,9 +5,9 @@ import { CANVAS_DEFAULTS } from '../core/config';
 export function createCanvas(width?: number, height?: number): Canvas {
   const id = generateId();
   const now = Date.now();
-  
+
   const defaultLayer = createLayer('Background');
-  
+
   return {
     id,
     width: width ?? CANVAS_DEFAULTS.width,
@@ -62,6 +62,14 @@ export class CanvasState {
     return this.canvas.referenceLayerId ?? null;
   }
 
+  getLayer(layerId: string): Layer | null {
+    return this.canvas.layers.find((l) => l.id === layerId) ?? null;
+  }
+
+  getLayers(): Layer[] {
+    return this.canvas.layers;
+  }
+
   setActiveLayer(layerId: string): void {
     if (this.canvas.layers.some((l) => l.id === layerId)) {
       this.canvas.activeLayerId = layerId;
@@ -91,22 +99,30 @@ export class CanvasState {
 
   removeLayer(layerId: string): boolean {
     if (this.canvas.layers.length <= 1) return false;
-    
+
     const index = this.canvas.layers.findIndex((l) => l.id === layerId);
     if (index === -1) return false;
-    
+
     this.canvas.layers.splice(index, 1);
     this.reindexLayers();
-    
+
     if (this.canvas.activeLayerId === layerId) {
       this.canvas.activeLayerId = this.canvas.layers[Math.max(0, index - 1)]!.id;
     }
     if (this.canvas.referenceLayerId === layerId) {
       this.canvas.referenceLayerId = null;
     }
-    
+
     this.canvas.modifiedAt = Date.now();
     return true;
+  }
+
+  restoreLayer(layer: Layer, index: number): void {
+    const insertIndex = Math.max(0, Math.min(this.canvas.layers.length, index));
+    this.canvas.layers.splice(insertIndex, 0, layer);
+    this.reindexLayers();
+    this.canvas.activeLayerId = layer.id;
+    this.canvas.modifiedAt = Date.now();
   }
 
   moveLayerUp(layerId: string): boolean {

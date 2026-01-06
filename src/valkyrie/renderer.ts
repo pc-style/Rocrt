@@ -102,11 +102,11 @@ export class ValkyrieRenderer implements IValkyrieRenderer {
   }
 
   compositeLayer(_layerId: string, _opacity: number, _blendMode: BlendMode): void {
-    // TODO: Implement layer compositing in Phase 5
+    // DEPRECATED: Layer compositing is handled by SkiaRenderer
   }
 
   renderTile(_tileId: string, _pixelData: Float32Array): void {
-    // TODO: Implement tile rendering in Phase 3
+    // DEPRECATED: Tile rendering is handled by SkiaRenderer
   }
 
   markTileDirty(tileId: string): void {
@@ -141,7 +141,7 @@ export class ValkyrieRenderer implements IValkyrieRenderer {
   private renderFrame(): void {
     if (!this.gl) return;
     this.gl.clear(this.gl.COLOR_BUFFER_BIT);
-    
+
     this.tileManager.uploadDirtyTiles();
     this.tileRenderer.renderTiles(
       this.tileManager,
@@ -149,7 +149,7 @@ export class ValkyrieRenderer implements IValkyrieRenderer {
       this.panOffset.x,
       this.panOffset.y
     );
-    
+
     this.debugRenderer.render();
     this.dirtyTiles.clear();
   }

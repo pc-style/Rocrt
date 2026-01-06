@@ -15,6 +15,14 @@ export enum BlendMode {
   Multiply = 'multiply',
   Screen = 'screen',
   Overlay = 'overlay',
+  Darken = 'darken',
+  Lighten = 'lighten',
+  ColorDodge = 'colordodge',
+  ColorBurn = 'colorburn',
+  HardLight = 'hardlight',
+  SoftLight = 'softlight',
+  Difference = 'difference',
+  Exclusion = 'exclusion',
 }
 
 export enum PointerType {

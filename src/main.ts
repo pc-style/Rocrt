@@ -1,6 +1,6 @@
 import { SkiaRenderer } from './valkyrie/skia-renderer';
 import { InputSampler } from './sensory';
-import { HistoryStack, IndexedDBStore } from './chronos';
+import { HistoryStack, IndexedDBStore, UndoExecutor, StoredProject } from './chronos';
 import { CanvasState, createLayer } from './chronos/canvas-state';
 import { ViewTransformer } from './valkyrie/view-transformer';
 import { mountUI } from './luma/canvas-overlay';
@@ -96,6 +96,7 @@ class OpenCanvasApp {
   private skiaRenderer: SkiaRenderer;
   private inputSampler: InputSampler;
   private history: HistoryStack;
+  private undoExecutor: UndoExecutor;
   private canvasState: CanvasState;
   private viewTransformer: ViewTransformer;
   private dbStore: IndexedDBStore;
@@ -141,6 +142,8 @@ class OpenCanvasApp {
   private colorDropDragging = false;
   private colorDropSeed: InputPoint | null = null;
   private colorDropStartX = 0;
+  private currentProjectId: string | null = null;
+  private projectName: string = 'Untitled';
   private lassoActive = false;
   private lassoDrawing = false;
   private lassoPoints: Point2D[] = [];
@@ -344,6 +347,7 @@ class OpenCanvasApp {
     this.skiaRenderer = new SkiaRenderer();
     this.inputSampler = new InputSampler();
     this.history = new HistoryStack();
+    this.undoExecutor = new UndoExecutor();
     this.canvasState = new CanvasState();
     this.viewTransformer = new ViewTransformer();
     this.dbStore = new IndexedDBStore();
@@ -355,6 +359,7 @@ class OpenCanvasApp {
       await this.dbStore.init();
 
       await this.skiaRenderer.init('canvas');
+      this.undoExecutor.init(this.skiaRenderer, this.canvasState);
       this.syncLayersToRenderer();
       this.updateViewSize();
       this.loadViewSettings();
@@ -571,6 +576,27 @@ class OpenCanvasApp {
       this.lastSmoothedPoint = null;
     });
 
+    eventBus.on('project:load', (project: StoredProject) => {
+      this.currentProjectId = project.id;
+      this.projectName = project.name;
+      this.canvasState.loadCanvas(project.canvas);
+
+      // Clear current indices as they are project-specific
+      this.strokeIndex.clear();
+      this.layerStrokeIndex.clear();
+      this.activeStrokeIds.clear();
+      this.fillIndex.clear();
+      this.layerFillIndex.clear();
+      this.activeFillIds.clear();
+
+      this.syncLayersToRenderer();
+      this.updateViewSize();
+      this.syncViewTransform();
+      this.emitLayerUpdate();
+      this.history.clear(); // Reset history for new project
+      console.log(`Loaded project: ${project.name} (${project.id})`);
+    });
+
     // Connect UI events
     eventBus.on(Events.BRUSH_SIZE_CHANGED, (size: number) => {
       this.currentSize = size;
@@ -650,107 +676,28 @@ class OpenCanvasApp {
     });
 
     // Undo/Redo handlers
+    eventBus.on('checkpoint:requested', () => {
+      this.performAutosave();
+    });
+
     eventBus.on(Events.UNDO_REQUESTED, () => {
       if (this.isReadOnly) return;
       const entry = this.history.undo();
-      if (entry && entry.actionType === 'stroke') {
-        const strokeId = (entry.data as any)?.id;
-        if (strokeId) {
-          this.skiaRenderer.undoStroke(strokeId);
-          this.activeStrokeIds.delete(strokeId);
-        }
+      if (entry) {
+        this.undoExecutor.executeUndo(entry);
+        this.emitLayerUpdate();
+        this.scheduleAutosave();
       }
-      if (entry && entry.actionType === 'fill') {
-        const fill = entry.data as FillRecord;
-        if (fill?.id) {
-          this.skiaRenderer.removeFill(fill.id);
-          this.activeFillIds.delete(fill.id);
-        }
-      }
-      if (entry && entry.actionType === 'layerClear') {
-        const data = entry.data as { strokes?: Stroke[]; fills?: FillRecord[]; cleared?: { strokes: Stroke[]; fills?: FillRecord[] }[] };
-        if (data?.cleared) {
-          for (const group of data.cleared) {
-            const strokes = (group.strokes ?? []).slice().sort((a, b) => a.timestamp - b.timestamp);
-            for (const stroke of strokes) {
-              this.skiaRenderer.replayStroke(stroke);
-              this.activeStrokeIds.add(stroke.id);
-            }
-            const fills = (group.fills ?? []).slice().sort((a, b) => a.timestamp - b.timestamp);
-            for (const fill of fills) {
-              const added = this.skiaRenderer.addFillFromPixels(fill.id, fill.layerId, fill.width, fill.height, fill.pixels, fill.timestamp);
-              if (added) {
-                this.indexFill(fill);
-                this.activeFillIds.add(fill.id);
-              }
-            }
-          }
-        } else {
-          const strokes = (data?.strokes ?? []).slice().sort((a, b) => a.timestamp - b.timestamp);
-          for (const stroke of strokes) {
-            this.skiaRenderer.replayStroke(stroke);
-            this.activeStrokeIds.add(stroke.id);
-          }
-          const fills = (data?.fills ?? []).slice().sort((a, b) => a.timestamp - b.timestamp);
-          for (const fill of fills) {
-            const added = this.skiaRenderer.addFillFromPixels(fill.id, fill.layerId, fill.width, fill.height, fill.pixels, fill.timestamp);
-            if (added) {
-              this.indexFill(fill);
-              this.activeFillIds.add(fill.id);
-            }
-          }
-        }
-      }
-      this.scheduleAutosave();
     });
 
     eventBus.on(Events.REDO_REQUESTED, () => {
       if (this.isReadOnly) return;
       const entry = this.history.redo();
-      if (entry && entry.actionType === 'stroke') {
-        const stroke = entry.data as Stroke;
-        if (stroke && stroke.points.length > 0) {
-          this.skiaRenderer.replayStroke(stroke);
-          this.activeStrokeIds.add(stroke.id);
-        }
+      if (entry) {
+        this.undoExecutor.executeRedo(entry);
+        this.emitLayerUpdate();
+        this.scheduleAutosave();
       }
-      if (entry && entry.actionType === 'fill') {
-        const fill = entry.data as FillRecord;
-        if (fill?.id) {
-          const added = this.skiaRenderer.addFillFromPixels(fill.id, fill.layerId, fill.width, fill.height, fill.pixels, fill.timestamp);
-          if (added) {
-            this.indexFill(fill);
-            this.activeFillIds.add(fill.id);
-          }
-        }
-      }
-      if (entry && entry.actionType === 'layerClear') {
-        const data = entry.data as { strokeIds?: string[]; fillIds?: string[]; cleared?: { strokeIds: string[]; fillIds?: string[] }[] };
-        if (data?.cleared) {
-          for (const group of data.cleared) {
-            for (const strokeId of group.strokeIds ?? []) {
-              this.skiaRenderer.undoStroke(strokeId);
-              this.activeStrokeIds.delete(strokeId);
-            }
-            for (const fillId of group.fillIds ?? []) {
-              this.skiaRenderer.removeFill(fillId);
-              this.activeFillIds.delete(fillId);
-            }
-          }
-        } else {
-          const strokeIds = data?.strokeIds ?? [];
-          for (const strokeId of strokeIds) {
-            this.skiaRenderer.undoStroke(strokeId);
-            this.activeStrokeIds.delete(strokeId);
-          }
-          const fillIds = data?.fillIds ?? [];
-          for (const fillId of fillIds) {
-            this.skiaRenderer.removeFill(fillId);
-            this.activeFillIds.delete(fillId);
-          }
-        }
-      }
-      this.scheduleAutosave();
     });
 
     // Layer handlers
@@ -763,6 +710,12 @@ class OpenCanvasApp {
         this.skiaRenderer.setLayerVisibility(layer.id, false);
         this.savedLayerVisibility?.set(layer.id, false);
       }
+      this.history.recordAction({
+        actionType: 'layerAdd',
+        layerId: layer.id,
+        data: layer,
+        inverseData: { layerId: layer.id }
+      });
       this.syncLayerOrder();
       // Emit layer state update
       this.emitLayerUpdate();
@@ -786,6 +739,12 @@ class OpenCanvasApp {
         this.skiaRenderer.setLayerVisibility(layerId, visible);
         this.savedLayerVisibility?.set(layerId, visible);
       }
+      this.history.recordAction({
+        actionType: 'layerPropChange',
+        layerId,
+        data: { layerId, property: 'visible', newValue: visible },
+        inverseData: { layerId, property: 'visible', oldValue: !visible }
+      });
       // Emit layer state update
       this.emitLayerUpdate();
       this.scheduleAutosave();
@@ -794,6 +753,12 @@ class OpenCanvasApp {
     eventBus.on(Events.LAYER_LOCK_TOGGLED, ({ layerId, locked }: { layerId: string; locked: boolean }) => {
       if (this.isReadOnly) return;
       this.canvasState.setLayerLocked(layerId, locked);
+      this.history.recordAction({
+        actionType: 'layerPropChange',
+        layerId,
+        data: { layerId, property: 'locked', newValue: locked },
+        inverseData: { layerId, property: 'locked', oldValue: !locked }
+      });
       // Emit layer state update
       this.emitLayerUpdate();
       this.scheduleAutosave();
@@ -802,13 +767,25 @@ class OpenCanvasApp {
     eventBus.on(Events.LAYER_ALPHA_LOCK_TOGGLED, ({ layerId, alphaLocked }: { layerId: string; alphaLocked: boolean }) => {
       if (this.isReadOnly) return;
       this.canvasState.setLayerAlphaLocked(layerId, alphaLocked);
+      this.history.recordAction({
+        actionType: 'layerPropChange',
+        layerId,
+        data: { layerId, property: 'alphaLocked', newValue: alphaLocked },
+        inverseData: { layerId, property: 'alphaLocked', oldValue: !alphaLocked }
+      });
       this.emitLayerUpdate();
       this.scheduleAutosave();
     });
 
     eventBus.on(Events.LAYER_BLEND_MODE_CHANGED, ({ layerId, blendMode }: { layerId: string; blendMode: BlendMode }) => {
-      if (this.isReadOnly) return;
+      const oldValue = this.canvasState.getLayer(layerId)?.blendMode;
       this.canvasState.setLayerBlendMode(layerId, blendMode);
+      this.history.recordAction({
+        actionType: 'layerPropChange',
+        layerId,
+        data: { layerId, property: 'blendMode', newValue: blendMode },
+        inverseData: { layerId, property: 'blendMode', oldValue }
+      });
       this.emitLayerUpdate();
       this.scheduleAutosave();
     });
@@ -844,9 +821,15 @@ class OpenCanvasApp {
     });
 
     eventBus.on(Events.LAYER_RENAMED, ({ layerId, name }: { layerId: string; name: string }) => {
-      if (this.isReadOnly) return;
+      const oldValue = this.canvasState.getLayer(layerId)?.name;
       const renamed = this.canvasState.renameLayer(layerId, name);
       if (!renamed) return;
+      this.history.recordAction({
+        actionType: 'layerPropChange',
+        layerId,
+        data: { layerId, property: 'name', newValue: name },
+        inverseData: { layerId, property: 'name', oldValue }
+      });
       this.emitLayerUpdate();
       this.scheduleAutosave();
     });
@@ -899,20 +882,33 @@ class OpenCanvasApp {
     });
 
     eventBus.on(Events.LAYER_OPACITY_CHANGED, ({ layerId, opacity }: { layerId: string; opacity: number }) => {
-      if (this.isReadOnly) return;
+      const oldValue = this.canvasState.getLayer(layerId)?.opacity;
       this.canvasState.setLayerOpacity(layerId, opacity);
       this.skiaRenderer.setLayerOpacity(layerId, opacity);
+      this.history.recordAction({
+        actionType: 'layerPropChange',
+        layerId,
+        data: { layerId, property: 'opacity', newValue: opacity },
+        inverseData: { layerId, property: 'opacity', oldValue }
+      });
       // Emit layer state update
       this.emitLayerUpdate();
       this.scheduleAutosave();
     });
 
     eventBus.on(Events.LAYER_DELETED, (layerId: string) => {
-      if (this.isReadOnly) return;
+      const layer = this.canvasState.getLayer(layerId);
+      const index = this.canvasState.getLayers().findIndex((l: any) => l.id === layerId);
       const removed = this.canvasState.removeLayer(layerId);
-      if (!removed) {
+      if (!removed || !layer) {
         return;
       }
+      this.history.recordAction({
+        actionType: 'layerDelete',
+        layerId,
+        data: { layerId },
+        inverseData: { layer, index }
+      });
       this.skiaRenderer.removeLayer(layerId);
       if (this.soloLayerId === layerId) {
         this.restoreLayerVisibility();
@@ -1890,11 +1886,24 @@ class OpenCanvasApp {
   }
 
   private async performAutosave(): Promise<void> {
-    if (this.isImporting || typeof window === 'undefined') return;
+    if (this.isReadOnly || this.isImporting || typeof window === 'undefined') return;
     try {
       const canvas = this.canvasState.getCanvas();
-      // TODO: Generate thumbnail from current canvas view once captureSnapshot is implemented
-      await this.dbStore.saveAutosave(canvas);
+      const thumbnail = this.skiaRenderer.captureSnapshot(200, 150) || undefined;
+
+      if (this.currentProjectId) {
+        await this.dbStore.saveProject({
+          id: this.currentProjectId,
+          name: this.projectName,
+          canvas,
+          thumbnail,
+          createdAt: canvas.createdAt,
+          modifiedAt: Date.now()
+        });
+      } else {
+        await this.dbStore.saveAutosave(canvas, thumbnail);
+      }
+
       this.lastAutosaveAt = Date.now();
       eventBus.emit(Events.PROJECT_AUTOSAVE_UPDATED, { available: true, timestamp: this.lastAutosaveAt });
     } catch (error) {

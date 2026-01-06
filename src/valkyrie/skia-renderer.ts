@@ -1,5 +1,6 @@
 import type { CanvasKit, Surface, Canvas, Path, Image as SkImage } from 'canvaskit-wasm';
 import CanvasKitInit from 'canvaskit-wasm';
+import { BlendMode } from '../core/types';
 import type { Color, InputPoint, Stroke, Point2D } from '../core/types';
 import { CANVAS_DEFAULTS, GRID_DEFAULTS, TILE_SIZE } from '../core/config';
 import { SkiaTileManager } from './skia-tile-manager';
@@ -31,6 +32,7 @@ export class SkiaRenderer {
 
   private layerVisibility: Map<string, boolean> = new Map();
   private layerOpacity: Map<string, number> = new Map();
+  private layerBlendModes: Map<string, BlendMode> = new Map();
   private layerTiles: Map<string, SkiaTileManager> = new Map();
   private layerOrder: string[] = [];
 
@@ -74,9 +76,10 @@ export class SkiaRenderer {
     this.render();
   }
 
-  registerLayer(layerId: string, visible: boolean = true, opacity: number = 1): void {
+  registerLayer(layerId: string, visible: boolean = true, opacity: number = 1, blendMode: BlendMode = BlendMode.Normal): void {
     this.layerVisibility.set(layerId, visible);
     this.layerOpacity.set(layerId, Math.max(0, Math.min(1, opacity)));
+    this.layerBlendModes.set(layerId, blendMode);
     if (!this.layerTiles.has(layerId) && this.ck) {
       this.layerTiles.set(layerId, new SkiaTileManager(this.ck));
     }
@@ -124,6 +127,58 @@ export class SkiaRenderer {
     link.download = safeName;
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  captureSnapshot(width: number, height: number): string | null {
+    if (!this.ck || !this.surface) return null;
+
+    // Create a temporary surface for the thumbnail
+    const surface = this.ck.MakeSurface(width, height);
+    if (!surface) return null;
+
+    const canvas = surface.getCanvas();
+    const composed = this.getComposedPixels(this.canvasElement?.width || 1024, this.canvasElement?.height || 1024);
+    if (!composed) {
+      surface.delete();
+      return null;
+    }
+
+    const info = {
+      width: this.canvasElement?.width || 1024,
+      height: this.canvasElement?.height || 1024,
+      colorType: this.ck.ColorType.RGBA_8888,
+      alphaType: this.ck.AlphaType.Premul,
+      colorSpace: this.ck.ColorSpace.SRGB,
+    };
+
+    const image = this.ck.MakeImage(info, composed, info.width * 4);
+    if (!image) {
+      surface.delete();
+      return null;
+    }
+
+    const paint = new this.ck.Paint();
+    canvas.clear(this.ck.TRANSPARENT);
+    canvas.drawImageRect(
+      image,
+      this.ck.XYWHRect(0, 0, info.width, info.height),
+      this.ck.XYWHRect(0, 0, width, height),
+      paint
+    );
+    paint.delete();
+
+    const snapshot = surface.makeImageSnapshot();
+    const bytes = snapshot.encodeToBytes(this.ck.ImageFormat.JPEG, 85);
+
+    snapshot.delete();
+    image.delete();
+    surface.delete();
+
+    if (!bytes) return null;
+
+    // Return base64
+    const binary = String.fromCharCode(...new Uint8Array(bytes));
+    return `data:image/jpeg;base64,${btoa(binary)}`;
   }
 
   exportPngWithBackground(filename?: string): void {
@@ -220,6 +275,9 @@ export class SkiaRenderer {
     }
     if (!this.layerOpacity.has(layerId)) {
       this.layerOpacity.set(layerId, 1);
+    }
+    if (!this.layerBlendModes.has(layerId)) {
+      this.layerBlendModes.set(layerId, BlendMode.Normal);
     }
     if (!this.layerTiles.has(layerId) && this.ck) {
       this.layerTiles.set(layerId, new SkiaTileManager(this.ck));
@@ -473,11 +531,32 @@ export class SkiaRenderer {
     for (const layerId of orderedLayers) {
       if (!this.isLayerVisible(layerId)) continue;
       const opacity = this.getLayerOpacity(layerId);
+      const blendMode = this.layerBlendModes.get(layerId) ?? BlendMode.Normal;
       const tileMgr = this.layerTiles.get(layerId);
       if (!tileMgr) continue;
 
       const layerPaint = new this.ck.Paint();
       layerPaint.setAlphaf(opacity);
+
+      // Apply Porter-Duff blend mode
+      if (this.ck) {
+        let skBlendMode = this.ck.BlendMode.SrcOver;
+        switch (blendMode) {
+          case BlendMode.Normal: skBlendMode = this.ck.BlendMode.SrcOver; break;
+          case BlendMode.Multiply: skBlendMode = this.ck.BlendMode.Multiply; break;
+          case BlendMode.Screen: skBlendMode = this.ck.BlendMode.Screen; break;
+          case BlendMode.Overlay: skBlendMode = this.ck.BlendMode.Overlay; break;
+          case BlendMode.Darken: skBlendMode = this.ck.BlendMode.Darken; break;
+          case BlendMode.Lighten: skBlendMode = this.ck.BlendMode.Lighten; break;
+          case BlendMode.ColorDodge: skBlendMode = this.ck.BlendMode.ColorDodge; break;
+          case BlendMode.ColorBurn: skBlendMode = this.ck.BlendMode.ColorBurn; break;
+          case BlendMode.HardLight: skBlendMode = this.ck.BlendMode.HardLight; break;
+          case BlendMode.SoftLight: skBlendMode = this.ck.BlendMode.SoftLight; break;
+          case BlendMode.Difference: skBlendMode = this.ck.BlendMode.Difference; break;
+          case BlendMode.Exclusion: skBlendMode = this.ck.BlendMode.Exclusion; break;
+        }
+        layerPaint.setBlendMode(skBlendMode);
+      }
 
       // Use advanced filtering (Bicubic) when zoomed in or out significantly
       const useBicubic = this.viewZoom > 2.0 || this.viewZoom < 0.5;
@@ -533,6 +612,12 @@ export class SkiaRenderer {
   setLayerOpacity(layerId: string, opacity: number): void {
     this.ensureLayerState(layerId);
     this.layerOpacity.set(layerId, Math.max(0, Math.min(1, opacity)));
+    this.render();
+  }
+
+  setLayerBlendMode(layerId: string, blendMode: BlendMode): void {
+    this.ensureLayerState(layerId);
+    this.layerBlendModes.set(layerId, blendMode);
     this.render();
   }
 

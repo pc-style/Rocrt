@@ -161,7 +161,7 @@ export function App() {
   const handleBackToGallery = useCallback(async () => {
     // save current project before going back
     if (currentProjectId) {
-      // TODO: save current canvas state to store
+      eventBus.emit('checkpoint:requested', null);
     }
     setView('gallery');
     setCurrentProjectId(null);

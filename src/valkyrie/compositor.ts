@@ -434,7 +434,7 @@ export class Compositor {
 
   // placeholder - in real impl this would composite layer tiles into a single texture
   private getLayerTexture(_layer: Layer): WebGLTexture | null {
-    // TODO: implement layer tile compositing
+    // DEPRECATED: Layer tile compositing is now handled by SkiaRenderer
     // for now returns null - real implementation would iterate layer.tileData
     // and composite all tiles into a layer-sized texture
     return null;

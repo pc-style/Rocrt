@@ -59,9 +59,16 @@ export class HistoryStack implements IChronosHistory {
     return this.redoStack.length > 0;
   }
 
+  clear(): void {
+    this.undoStack = [];
+    this.redoStack = [];
+    this.actionsSinceCheckpoint = 0;
+    this.emitState();
+  }
+
   createCheckpoint(): void {
     this.actionsSinceCheckpoint = 0;
-    // TODO: Implement checkpoint snapshot in Phase 4
+    eventBus.emit('checkpoint:requested', { timestamp: Date.now() });
   }
 
   getUndoStackSize(): number {
