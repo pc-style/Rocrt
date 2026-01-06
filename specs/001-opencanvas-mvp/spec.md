@@ -114,11 +114,11 @@ An artist working on a tablet uses multi-touch gestures to navigate their canvas
 
 **Rendering System**
 
-- **FR-001**: System MUST efficiently render large canvases without memory constraints affecting usability
+- **FR-001**: System MUST render canvases up to 4096x4096px (SC-003) without performance degradation
 - **FR-002**: System MUST support smooth zoom operations from 12.5% to 6400% without visual artifacts
 - **FR-003**: System MUST support smooth pan operations across entire canvas without performance degradation
-- **FR-004**: System MUST provide professional-grade color accuracy with no visible banding or posterization in brush strokes
-- **FR-005**: System MUST maintain smooth visual performance during active drawing without lag or stutter
+- **FR-004**: System MUST provide color accuracy with 16-bit linear blending (Principle IV) to prevent banding
+- **FR-005**: System MUST maintain 60fps minimum (SC-001) during active drawing without lag or stutter
 - **FR-006**: System MUST composite all visible layers in real-time during canvas navigation
 
 **Brush System**
@@ -131,17 +131,17 @@ An artist working on a tablet uses multi-touch gestures to navigate their canvas
 
 **Input System**
 
-- **FR-012**: System MUST correctly handle stylus input from pressure-sensitive devices (Wacom tablets, Apple Pencil)
+- **FR-012**: System MUST correctly handle stylus input from pressure-sensitive devices at 120Hz minimum sampling frequency
 - **FR-013**: System MUST distinguish between stylus drawing input and multi-touch navigation gestures
 - **FR-014**: System MUST support pinch-to-zoom gesture for canvas navigation
 - **FR-015**: System MUST support two-finger pan gesture for canvas navigation
 - **FR-016**: System MUST support two-finger rotate gesture for canvas rotation
 - **FR-017**: System MUST implement palm rejection to ignore accidental touch input during stylus drawing
-- **FR-018**: System MUST capture input samples at sufficient frequency for smooth, responsive stroke rendering without visible lag
+- **FR-018**: System MUST capture input samples at 120Hz+ for smooth, responsive stroke rendering (latency < 16ms)
 
 **History System**
 
-- **FR-019**: System MUST implement memory-efficient undo/redo functionality that supports extensive edit history
+- **FR-019**: System MUST implement action-led history (not pixel-diff) with checkpoint snapshots every 50 actions
 - **FR-020**: System MUST support minimum 100 undo steps in history stack
 - **FR-021**: System MUST execute undo operations instantly without noticeable delay
 - **FR-022**: System MUST execute redo operations instantly without noticeable delay

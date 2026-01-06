@@ -538,6 +538,11 @@ Add final polish: performance monitoring, error handling, mobile optimization, a
   - Use viewport meta tag for proper mobile scaling
   - File: `/src/luma/canvas-overlay.tsx` (update), `/public/index.html` (update)
 
+- [ ] T052b [Core] Benchmark and optimize application load time
+  - Verify compliance with SC-010 (< 3s load time)
+  - Implement code splitting or asset optimization if needed
+  - File: `/src/main.ts` (optimization)
+
 ---
 
 ## Phase 9: Testing & Quality Assurance
