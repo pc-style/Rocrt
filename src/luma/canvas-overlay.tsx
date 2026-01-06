@@ -379,10 +379,12 @@ export function CanvasOverlay() {
         }));
       }),
       eventBus.on(Events.COLOR_DROP_TOGGLED, (data?: { active?: boolean }) => {
-        setState((s) => ({
-          ...s,
-          colorDropActive: data?.active !== undefined ? data.active : !s.colorDropActive,
-        }));
+        // Only update state if we have an explicit active value
+        // This prevents double-toggling when main.ts re-emits the event
+        const active = data?.active;
+        if (typeof active === 'boolean') {
+          setState((s) => ({ ...s, colorDropActive: active }));
+        }
       }),
       eventBus.on(Events.COLOR_DROP_THRESHOLD_CHANGED, (value: number) => {
         if (Number.isFinite(value)) {
@@ -393,10 +395,12 @@ export function CanvasOverlay() {
         setState((s) => ({ ...s, colorDropDragging: value }));
       }),
       eventBus.on(Events.LASSO_TOGGLED, (data?: { active?: boolean }) => {
-        setState((s) => ({
-          ...s,
-          lassoActive: data?.active !== undefined ? data.active : !s.lassoActive,
-        }));
+        // Only update state if we have an explicit active value
+        // This prevents double-toggling when main.ts re-emits the event
+        const active = data?.active;
+        if (typeof active === 'boolean') {
+          setState((s) => ({ ...s, lassoActive: active }));
+        }
       }),
       eventBus.on(Events.SELECTION_UPDATED, (data?: { active?: boolean }) => {
         if (data?.active !== undefined) {

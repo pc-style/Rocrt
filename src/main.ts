@@ -1104,12 +1104,15 @@ class OpenCanvasApp {
 
     eventBus.on(Events.ERASER_TOGGLED, (data?: { active?: boolean }) => {
       if (typeof data?.active === 'boolean') {
+        // Explicit value - just set it, no need to re-emit
         this.eraserActive = data.active;
+        this.skiaRenderer.setEraserMode(this.eraserActive);
       } else {
+        // Toggle mode - toggle and emit new state
         this.eraserActive = !this.eraserActive;
+        this.skiaRenderer.setEraserMode(this.eraserActive);
+        eventBus.emit(Events.ERASER_TOGGLED, { active: this.eraserActive });
       }
-      this.skiaRenderer.setEraserMode(this.eraserActive);
-      eventBus.emit(Events.ERASER_TOGGLED, { active: this.eraserActive });
     });
 
     eventBus.on(Events.PAN_MODE_TOGGLED, (data?: { active?: boolean }) => {
@@ -1131,8 +1134,17 @@ class OpenCanvasApp {
 
     eventBus.on(Events.COLOR_DROP_DRAG_END, (data: { x: number; y: number; color: Color }) => {
       if (!data) return;
-      // Map screen coordinates to canvas coordinates
-      const canvasPos = this.viewTransformer.screenToCanvas(data.x, data.y);
+      // Get DPR-scaled screen coords (same as InputSampler.eventToInputPoint)
+      const canvasEl = document.getElementById('canvas') as HTMLCanvasElement | null;
+      if (!canvasEl) return;
+      const rect = canvasEl.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const screenX = (data.x - rect.left) * dpr;
+      const screenY = (data.y - rect.top) * dpr;
+
+      // Apply view transform (zoom/pan/rotation) - matches click-based flow
+      const canvasPos = this.viewTransformer.screenToCanvas(screenX, screenY);
+
       const seed: InputPoint = {
         x: canvasPos.x,
         y: canvasPos.y,
@@ -1152,9 +1164,14 @@ class OpenCanvasApp {
     // Handle color drop from drag-and-drop onto canvas
     eventBus.on('sensory:color-drop-at-position', (data: { x: number; y: number }) => {
       if (!data) return;
+
+      // The input-sampler provides screen coordinates (with DPR applied)
+      // We need to convert through the view transform for zoom/pan support
+      const canvasPos = this.viewTransformer.screenToCanvas(data.x, data.y);
+
       const seed: InputPoint = {
-        x: data.x,
-        y: data.y,
+        x: canvasPos.x,
+        y: canvasPos.y,
         pressure: 1,
         tiltX: 0,
         tiltY: 0,
@@ -1172,6 +1189,7 @@ class OpenCanvasApp {
       }
       this.setLassoActive(!this.lassoActive);
     });
+
 
     eventBus.on(Events.CANVAS_RESIZE_REQUESTED, (data?: { width: number; height: number; anchor?: 'center' | 'topLeft' }) => {
       if (!data) return;
@@ -3093,6 +3111,20 @@ class OpenCanvasApp {
       };
     }
     return { ...point, x: mapped.x, y: mapped.y };
+  }
+
+  private clientToCanvasScreenPoint(clientX: number, clientY: number): Point2D | null {
+    const canvasEl = document.getElementById('canvas') as HTMLCanvasElement | null;
+    if (!canvasEl) return null;
+    const rect = canvasEl.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const x = (clientX - rect.left) * dpr;
+    const y = (clientY - rect.top) * dpr;
+    const width = canvasEl.width || canvasEl.clientWidth;
+    const height = canvasEl.height || canvasEl.clientHeight;
+    if (width <= 0 || height <= 0) return null;
+    if (x < 0 || y < 0 || x > width || y > height) return null;
+    return { x, y };
   }
 
   private isPointInLayerMask(layerId: string, point: InputPoint): boolean {
