@@ -11,16 +11,18 @@ import {
 import { eventBus, Events } from '../../core/events';
 import type { Color } from '../../core/types';
 
-type ActiveTool = 'brush' | 'eraser' | 'smudge' | 'colorDrop' | 'lasso' | 'hand' | 'move';
+
 
 interface ProcreateToolsPanelProps {
-    activeTool: ActiveTool;
+    activeTool: 'brush' | 'eraser' | 'smudge' | 'colorDrop' | 'lasso' | 'hand' | 'move';
     brushColor: Color;
     colorDropActive: boolean;
     lassoActive: boolean;
     panModeActive: boolean;
+    eraserActive: boolean;
     onColorClick: () => void;
     onLayersClick: () => void;
+    onBrushLibraryClick: () => void;
 }
 
 /**
@@ -33,11 +35,19 @@ export function ProcreateToolsPanel({
     colorDropActive,
     lassoActive,
     panModeActive,
+    eraserActive,
     onColorClick,
     onLayersClick,
+    onBrushLibraryClick,
 }: ProcreateToolsPanelProps) {
     const handleBrushSelect = () => {
-        // If already on brush, could open brush library
+        // If already on brush, open brush library
+        if (activeTool === 'brush' && !eraserActive) {
+            onBrushLibraryClick();
+            return;
+        }
+        // Switch to brush mode
+        eventBus.emit(Events.ERASER_TOGGLED, { active: false });
         eventBus.emit(Events.COLOR_DROP_TOGGLED, { active: false });
         eventBus.emit(Events.LASSO_TOGGLED, { active: false });
         eventBus.emit(Events.PAN_MODE_TOGGLED, { active: false });
@@ -95,7 +105,7 @@ export function ProcreateToolsPanel({
             <IconButton
                 icon={<Paintbrush size={20} strokeWidth={2} />}
                 onClick={handleBrushSelect}
-                active={activeTool === 'brush' && !colorDropActive && !lassoActive && !panModeActive}
+                active={activeTool === 'brush'}
                 title="Brush (B)"
             />
 

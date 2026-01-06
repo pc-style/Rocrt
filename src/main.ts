@@ -113,7 +113,33 @@ class OpenCanvasApp {
   private quickShapeCornerAngle = 0.55;
   private quickShapeCornerSeparation = 12;
   private currentStabilization: number = BRUSH_DEFAULTS.stabilization;
+  private currentBrushPreset: {
+    spacing: number;
+    scatter: number;
+    scatterBoth: boolean;
+    rotation: number;
+    rotationJitter: number;
+    rotateToStroke: boolean;
+    sizeJitter: number;
+    count: number;
+    flow: number;
+    roundness: number;
+    hardness: number;
+  } = {
+      spacing: 0.05,
+      scatter: 0,
+      scatterBoth: true,
+      rotation: 0,
+      rotationJitter: 0,
+      rotateToStroke: false,
+      sizeJitter: 0,
+      count: 1,
+      flow: 1,
+      roundness: 1,
+      hardness: 1,
+    };
   private lastSmoothedPoint: InputPoint | null = null;
+
   private soloLayerId: string | null = null;
   private savedLayerVisibility: Map<string, boolean> | null = null;
   private readonly brushStorageKey = 'opencanvas:brush-settings';
@@ -627,6 +653,54 @@ class OpenCanvasApp {
       this.scheduleAutosave();
     });
 
+    // Advanced brush preset handler
+    eventBus.on('brush:preset-changed', (preset: {
+      size?: number;
+      opacity?: number;
+      spacing?: number;
+      scatter?: number;
+      scatterBoth?: boolean;
+      rotation?: number;
+      rotationJitter?: number;
+      rotateToStroke?: boolean;
+      sizeJitter?: number;
+      count?: number;
+      flow?: number;
+      roundness?: number;
+      hardness?: number;
+    }) => {
+      if (!preset) return;
+
+      // Apply basic settings
+      if (preset.size !== undefined) {
+        this.currentSize = preset.size;
+        this.skiaRenderer.setStrokeWidth(preset.size);
+      }
+      if (preset.opacity !== undefined) {
+        const alpha = Math.round(Math.max(0, Math.min(1, preset.opacity)) * 255);
+        this.currentColor = { ...this.currentColor, a: alpha };
+        this.skiaRenderer.setColor(this.currentColor);
+      }
+
+      // Store advanced properties for brush rendering
+      this.currentBrushPreset = {
+        spacing: preset.spacing ?? 0.05,
+        scatter: preset.scatter ?? 0,
+        scatterBoth: preset.scatterBoth ?? true,
+        rotation: preset.rotation ?? 0,
+        rotationJitter: preset.rotationJitter ?? 0,
+        rotateToStroke: preset.rotateToStroke ?? false,
+        sizeJitter: preset.sizeJitter ?? 0,
+        count: preset.count ?? 1,
+        flow: preset.flow ?? 1,
+        roundness: preset.roundness ?? 1,
+        hardness: preset.hardness ?? 1,
+      };
+
+      this.saveBrushSettings();
+      this.scheduleAutosave();
+    });
+
     eventBus.on(Events.BACKGROUND_COLOR_CHANGED, (color: Color) => {
       this.currentBackground = {
         r: Math.max(0, Math.min(255, color.r)),
@@ -1073,6 +1147,22 @@ class OpenCanvasApp {
       this.currentColor = { ...data.color };
       this.performColorDrop(seed, this.colorDropThreshold);
       this.currentColor = originalColor;
+    });
+
+    // Handle color drop from drag-and-drop onto canvas
+    eventBus.on('sensory:color-drop-at-position', (data: { x: number; y: number }) => {
+      if (!data) return;
+      const seed: InputPoint = {
+        x: data.x,
+        y: data.y,
+        pressure: 1,
+        tiltX: 0,
+        tiltY: 0,
+        timestamp: Date.now(),
+        pointerType: PointerType.Mouse,
+      };
+      // Use current brush color for the fill
+      this.performColorDrop(seed, this.colorDropThreshold);
     });
 
     eventBus.on(Events.LASSO_TOGGLED, (data?: { active?: boolean }) => {
@@ -2247,7 +2337,20 @@ class OpenCanvasApp {
             pressureOpacityCurve: (pressure: number) => 0.5 + pressure * 0.5,
             blendMode: BlendMode.Normal,
             spacing: 0.05,
+            // Advanced defaults
+            scatter: 0,
+            scatterBoth: true,
+            rotation: 0,
+            rotationJitter: 0,
+            rotateToStroke: false,
+            sizeJitter: 0,
+            count: 1,
+            flow: 1,
+            roundness: 1,
+            angle: 0,
+            hardness: 1,
           },
+
           affectedTiles: [],
           timestamp,
           duration,

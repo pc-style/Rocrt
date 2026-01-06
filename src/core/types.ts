@@ -48,6 +48,19 @@ export interface BrushConfig {
   pressureOpacityCurve: (pressure: number) => number;
   blendMode: BlendMode;
   spacing: number;
+
+  // Advanced properties
+  scatter: number;           // 0-1, how far stamps scatter from path
+  scatterBoth: boolean;      // scatter in both directions
+  rotation: number;          // base rotation in degrees
+  rotationJitter: number;    // random rotation variation 0-360
+  rotateToStroke: boolean;   // rotate stamps to follow stroke direction
+  sizeJitter: number;        // 0-1, random size variation
+  count: number;             // stamps per spacing step (1 = normal, 3+ = spray)
+  flow: number;              // 0-1, paint density per stamp
+  roundness: number;         // 0-1, circle to ellipse
+  angle: number;             // ellipse rotation
+  hardness: number;          // 0-1, edge softness (1 = hard, 0 = soft)
 }
 
 export interface StampPlot {
@@ -55,7 +68,13 @@ export interface StampPlot {
   size: number;
   opacity: number;
   color: Color;
+  // Advanced properties
+  rotation: number;          // degrees
+  roundness: number;         // 0-1
+  hardness: number;          // 0-1
+  scatterOffset: Point2D;    // offset from original position
 }
+
 
 export interface Layer {
   id: string;

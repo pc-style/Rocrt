@@ -6,6 +6,7 @@ import type { Color } from '../../core/types';
 
 interface ProcreateColorPickerProps {
     color: Color;
+    backgroundColor: Color;
     colorHistory: Color[];
     isOpen: boolean;
     onClose: () => void;
@@ -16,11 +17,13 @@ interface ProcreateColorPickerProps {
  */
 export function ProcreateColorPicker({
     color,
+    backgroundColor,
     colorHistory,
     isOpen,
     onClose,
 }: ProcreateColorPickerProps) {
     const colorInputRef = useRef<HTMLInputElement>(null);
+    const bgInputRef = useRef<HTMLInputElement>(null);
 
     const handleColorChange = useCallback((e: Event) => {
         const hex = (e.target as HTMLInputElement).value.replace('#', '');
@@ -37,6 +40,19 @@ export function ProcreateColorPicker({
 
     const handleOpenNative = () => {
         colorInputRef.current?.click();
+    };
+
+    const handleBackgroundChange = useCallback((e: Event) => {
+        const hex = (e.target as HTMLInputElement).value.replace('#', '');
+        if (hex.length !== 6) return;
+        const r = parseInt(hex.slice(0, 2), 16);
+        const g = parseInt(hex.slice(2, 4), 16);
+        const b = parseInt(hex.slice(4, 6), 16);
+        eventBus.emit(Events.BACKGROUND_COLOR_CHANGED, { r, g, b, a: 255 });
+    }, []);
+
+    const handleOpenBgPicker = () => {
+        bgInputRef.current?.click();
     };
 
     if (!isOpen) return null;
@@ -197,6 +213,42 @@ export function ProcreateColorPicker({
                                 />
                             );
                         })}
+                    </div>
+                </div>
+
+                {/* Background color */}
+                <div style={{ marginTop: '16px' }}>
+                    <div style={{ color: '#888', fontSize: '11px', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        Canvas Background
+                    </div>
+                    <div
+                        onClick={handleOpenBgPicker}
+                        style={{
+                            width: '100%',
+                            height: '40px',
+                            borderRadius: '10px',
+                            background: `rgb(${backgroundColor.r}, ${backgroundColor.g}, ${backgroundColor.b})`,
+                            cursor: 'pointer',
+                            boxShadow: 'inset 0 1px 4px rgba(0,0,0,0.2)',
+                            position: 'relative',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                        }}
+                    >
+                        <input
+                            ref={bgInputRef}
+                            type="color"
+                            value={`#${backgroundColor.r.toString(16).padStart(2, '0')}${backgroundColor.g.toString(16).padStart(2, '0')}${backgroundColor.b.toString(16).padStart(2, '0')}`}
+                            onInput={handleBackgroundChange}
+                            style={{
+                                position: 'absolute',
+                                top: 0,
+                                left: 0,
+                                width: '100%',
+                                height: '100%',
+                                opacity: 0,
+                                cursor: 'pointer',
+                            }}
+                        />
                     </div>
                 </div>
             </div>

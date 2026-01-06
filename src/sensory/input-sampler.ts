@@ -60,6 +60,10 @@ export class InputSampler implements ISensoryInput {
     this.canvas.addEventListener('pointerleave', this.handlePointerUp);
     this.canvas.addEventListener('wheel', this.handleWheel, { passive: false });
 
+    // Color drop drag-and-drop support
+    this.canvas.addEventListener('dragover', this.handleDragOver);
+    this.canvas.addEventListener('drop', this.handleDrop);
+
     this.subscribeToGestures();
     this.isActive = false;
   }
@@ -73,6 +77,8 @@ export class InputSampler implements ISensoryInput {
     this.canvas.removeEventListener('pointercancel', this.handlePointerUp);
     this.canvas.removeEventListener('pointerleave', this.handlePointerUp);
     this.canvas.removeEventListener('wheel', this.handleWheel);
+    this.canvas.removeEventListener('dragover', this.handleDragOver);
+    this.canvas.removeEventListener('drop', this.handleDrop);
 
     for (const sub of this.gestureSubscriptions) {
       sub.unsubscribe();
@@ -196,6 +202,32 @@ export class InputSampler implements ISensoryInput {
       y: -(event.deltaY * deltaScale),
     };
     eventBus.emit(Events.GESTURE_PAN, { center, displacement });
+  };
+
+  private handleDragOver = (event: DragEvent): void => {
+    // Prevent default to allow drop
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy';
+    }
+  };
+
+  private handleDrop = (event: DragEvent): void => {
+    event.preventDefault();
+    if (!this.canvas) return;
+
+    // Check if this is a color drop
+    const data = event.dataTransfer?.getData('text/plain');
+    if (data !== 'colordrop') return;
+
+    // Calculate canvas-relative position
+    const rect = this.canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const x = (event.clientX - rect.left) * dpr;
+    const y = (event.clientY - rect.top) * dpr;
+
+    // Emit color drop at this position
+    eventBus.emit('sensory:color-drop-at-position', { x, y });
   };
 
   private eventToInputPoint(event: PointerEvent): InputPoint {

@@ -400,7 +400,20 @@ export class SkiaRenderer {
         pressureOpacityCurve: (p) => 0.5 + p * 0.5,
         blendMode: 'normal' as any,
         spacing: 0.05,
+        // Advanced defaults
+        scatter: 0,
+        scatterBoth: true,
+        rotation: 0,
+        rotationJitter: 0,
+        rotateToStroke: false,
+        sizeJitter: 0,
+        count: 1,
+        flow: 1,
+        roundness: 1,
+        angle: 0,
+        hardness: 1,
       },
+
       affectedTiles: [],
       timestamp: Date.now(),
       duration: this.currentStrokePoints.length > 1

@@ -418,11 +418,14 @@ export function CanvasOverlay() {
         setState((s) => ({ ...s, isReadOnly: data?.readonly ?? !s.isReadOnly }));
       }),
       eventBus.on(Events.ERASER_TOGGLED, (data?: { active?: boolean }) => {
-        setState((s) => ({
-          ...s,
-          eraserActive: data?.active !== undefined ? data.active : !s.eraserActive,
-        }));
+        // Only update state if we have an explicit active value
+        // This prevents double-toggling when main.ts re-emits the event
+        const active = data?.active;
+        if (typeof active === 'boolean') {
+          setState((s) => ({ ...s, eraserActive: active }));
+        }
       }),
+
     ];
 
     // Load initial canvas state
@@ -523,6 +526,8 @@ export function CanvasOverlay() {
 
   const toggleLayerPanel = () => setState((s) => ({ ...s, layerPanelOpen: !s.layerPanelOpen }));
   const toggleColorPicker = () => setState((s) => ({ ...s, colorPickerOpen: !s.colorPickerOpen }));
+  const toggleBrushLibrary = () => setState((s) => ({ ...s, brushLibraryOpen: !s.brushLibraryOpen }));
+
 
   const getActiveTool = (): 'brush' | 'eraser' | 'smudge' | 'colorDrop' | 'lasso' | 'hand' | 'move' => {
     if (state.colorDropActive) return 'colorDrop';
@@ -600,9 +605,12 @@ export function CanvasOverlay() {
             colorDropActive={state.colorDropActive}
             lassoActive={state.lassoActive}
             panModeActive={state.panModeActive}
+            eraserActive={state.eraserActive}
             onColorClick={toggleColorPicker}
             onLayersClick={toggleLayerPanel}
+            onBrushLibraryClick={toggleBrushLibrary}
           />
+
 
           {/* Left: Size/Opacity sliders */}
           <ProcreateSidebar
@@ -623,10 +631,20 @@ export function CanvasOverlay() {
 
           <ProcreateColorPicker
             color={state.brushColor}
+            backgroundColor={state.backgroundColor}
             colorHistory={state.colorHistory}
             isOpen={state.colorPickerOpen}
             onClose={() => setState((s) => ({ ...s, colorPickerOpen: false }))}
           />
+
+
+          <BrushLibrary
+            isOpen={state.brushLibraryOpen}
+            onClose={() => setState((s) => ({ ...s, brushLibraryOpen: false }))}
+            currentSize={state.brushSize}
+            currentOpacity={state.brushOpacity}
+          />
+
 
           {/* Canvas size panel */}
           {state.showCanvasSize && (
