@@ -4,7 +4,7 @@ export interface Tile {
   id: string;
   gridX: number;
   gridY: number;
-  pixelData: Uint16Array;
+  pixelData: Float32Array;
   dirty: boolean;
   gpuTexture: WebGLTexture | null;
 }
@@ -42,7 +42,7 @@ export class TileManager {
         id,
         gridX,
         gridY,
-        pixelData: new Uint16Array(TILE_SIZE * TILE_SIZE * 4),
+        pixelData: new Float32Array(TILE_SIZE * TILE_SIZE * 4),
         dirty: true,
         gpuTexture: null,
       };
@@ -83,12 +83,12 @@ export class TileManager {
     this.gl.texImage2D(
       this.gl.TEXTURE_2D,
       0,
-      this.gl.RGBA16F,
+      this.gl.RGBA32F,
       TILE_SIZE,
       TILE_SIZE,
       0,
       this.gl.RGBA,
-      this.gl.HALF_FLOAT,
+      this.gl.FLOAT,
       tile.pixelData
     );
 

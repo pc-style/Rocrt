@@ -11,8 +11,9 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "preact": "^10.19.3",
-    "idb": "^8.0.0"
+    "canvaskit-wasm": "^0.40.0",
+    "idb": "^8.0.0",
+    "preact": "^10.19.3"
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.8.2",

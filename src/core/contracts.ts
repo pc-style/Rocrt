@@ -17,7 +17,7 @@ export interface IValkyrieRenderer {
   setPan(offset: Point2D): void;
   setRotation(angle: number): void;
   compositeLayer(layerId: string, opacity: number, blendMode: BlendMode): void;
-  renderTile(tileId: string, pixelData: Uint16Array): void;
+  renderTile(tileId: string, pixelData: Float32Array): void;
   markTileDirty(tileId: string): void;
   requestFrame(): void;
   startRenderLoop(): void;

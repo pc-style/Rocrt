@@ -1,27 +1,72 @@
 import type { InputPoint, Stroke, BrushConfig } from '../core/types';
+import { BezierStabilizer, StabilizerConfig } from './bezier-stabilizer';
 
 export class StrokeBuilder {
   private points: InputPoint[] = [];
+  private rawPoints: InputPoint[] = []; // original unsmoothed points
   private startTime: number = 0;
   private isActive: boolean = false;
   private layerId: string = '';
   private brushConfig: BrushConfig | null = null;
+  private stabilizer: BezierStabilizer;
+  private stabilizationEnabled: boolean = true;
+
+  constructor(stabilizerConfig?: Partial<StabilizerConfig>) {
+    this.stabilizer = new BezierStabilizer(stabilizerConfig);
+  }
+
+  setStabilization(enabled: boolean): void {
+    this.stabilizationEnabled = enabled;
+  }
+
+  setStabilizerConfig(config: Partial<StabilizerConfig>): void {
+    this.stabilizer.setConfig(config);
+  }
 
   begin(point: InputPoint, layerId: string, brushConfig: BrushConfig): void {
-    this.points = [point];
+    this.rawPoints = [point];
     this.startTime = point.timestamp;
     this.isActive = true;
     this.layerId = layerId;
     this.brushConfig = { ...brushConfig };
+    this.stabilizer.reset();
+
+    if (this.stabilizationEnabled) {
+      this.points = this.stabilizer.addPoint(point);
+    } else {
+      this.points = [point];
+    }
   }
 
-  addPoint(point: InputPoint): void {
-    if (!this.isActive) return;
-    this.points.push(point);
+  // returns newly stabilized points for immediate rendering
+  addPoint(point: InputPoint): InputPoint[] {
+    if (!this.isActive) return [];
+    this.rawPoints.push(point);
+
+    if (this.stabilizationEnabled) {
+      const newPoints = this.stabilizer.addPoint(point);
+      this.points.push(...newPoints);
+      return newPoints;
+    } else {
+      this.points.push(point);
+      return [point];
+    }
   }
 
+  // returns final stabilized points when stroke ends
   end(): Stroke | null {
-    if (!this.isActive || !this.brushConfig || this.points.length === 0) {
+    if (!this.isActive || !this.brushConfig) {
+      this.reset();
+      return null;
+    }
+
+    // flush remaining stabilizer buffer
+    if (this.stabilizationEnabled) {
+      const finalPoints = this.stabilizer.finish();
+      this.points.push(...finalPoints);
+    }
+
+    if (this.points.length === 0) {
       this.reset();
       return null;
     }
@@ -39,6 +84,12 @@ export class StrokeBuilder {
 
     this.reset();
     return stroke;
+  }
+
+  // get final points when stroke ends (for rendering the flush)
+  finishAndGetFinalPoints(): InputPoint[] {
+    if (!this.stabilizationEnabled) return [];
+    return this.stabilizer.finish();
   }
 
   cancel(): void {
@@ -59,10 +110,16 @@ export class StrokeBuilder {
 
   private reset(): void {
     this.points = [];
+    this.rawPoints = [];
     this.startTime = 0;
     this.isActive = false;
     this.layerId = '';
     this.brushConfig = null;
+    this.stabilizer.reset();
+  }
+
+  getRawPoints(): InputPoint[] {
+    return this.rawPoints;
   }
 
   private generateId(): string {

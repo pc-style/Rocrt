@@ -1,17 +1,20 @@
 import type { IAlchemyBrush } from '../core/contracts';
-import type { InputPoint, BrushConfig, StampPlot, Color } from '../core/types';
+import type { InputPoint, BrushConfig, StampPlot } from '../core/types';
 import { BlendMode } from '../core/types';
 import { BRUSH_DEFAULTS } from '../core/config';
 
 export class BrushEngine implements IAlchemyBrush {
   private config: BrushConfig;
+  private lastPlottedX: number = 0;
+  private lastPlottedY: number = 0;
+  private hasLastPoint: boolean = false;
 
   constructor() {
     this.config = {
       baseSize: BRUSH_DEFAULTS.baseSize,
       color: { ...BRUSH_DEFAULTS.color },
-      pressureSizeCurve: (p: number) => p,
-      pressureOpacityCurve: (p: number) => p,
+      pressureSizeCurve: (p: number) => 0.3 + p * 0.7,
+      pressureOpacityCurve: (p: number) => 0.5 + p * 0.5,
       blendMode: BlendMode.Normal,
       spacing: BRUSH_DEFAULTS.spacing,
     };
@@ -37,7 +40,7 @@ export class BrushEngine implements IAlchemyBrush {
       this.config.blendMode = config.blendMode;
     }
     if (config.spacing !== undefined) {
-      this.config.spacing = Math.max(0.01, Math.min(1.0, config.spacing));
+      this.config.spacing = Math.max(0.05, Math.min(1.0, config.spacing));
     }
   }
 
@@ -45,61 +48,76 @@ export class BrushEngine implements IAlchemyBrush {
     return { ...this.config };
   }
 
+  resetStroke(): void {
+    this.hasLastPoint = false;
+  }
+
   plotStroke(points: InputPoint[]): StampPlot[] {
     if (points.length === 0) return [];
 
     const stamps: StampPlot[] = [];
-    const spacingPx = this.config.baseSize * this.config.spacing;
+    const spacing = Math.max(1, this.config.baseSize * this.config.spacing);
 
-    let lastX = points[0]!.x;
-    let lastY = points[0]!.y;
-    let accumulatedDistance = 0;
-
-    for (const point of points) {
-      const dx = point.x - lastX;
-      const dy = point.y - lastY;
-      const distance = Math.sqrt(dx * dx + dy * dy);
-
-      accumulatedDistance += distance;
-
-      while (accumulatedDistance >= spacingPx) {
-        const t = spacingPx / accumulatedDistance;
-        const stampX = lastX + dx * t;
-        const stampY = lastY + dy * t;
-
-        const size = this.config.baseSize * this.config.pressureSizeCurve(point.pressure);
-        const opacity = this.config.pressureOpacityCurve(point.pressure);
-
-        stamps.push({
-          position: { x: stampX, y: stampY },
-          size,
-          opacity,
-          color: this.applyOpacity(this.config.color, opacity),
-        });
-
-        accumulatedDistance -= spacingPx;
-        lastX = stampX;
-        lastY = stampY;
+    for (let i = 0; i < points.length; i++) {
+      const point = points[i]!;
+      
+      if (!this.hasLastPoint) {
+        // First point of stroke - place a stamp
+        this.lastPlottedX = point.x;
+        this.lastPlottedY = point.y;
+        this.hasLastPoint = true;
+        
+        stamps.push(this.createStamp(point.x, point.y, point.pressure));
+        continue;
       }
 
-      lastX = point.x;
-      lastY = point.y;
+      // Calculate distance from last plotted point
+      const dx = point.x - this.lastPlottedX;
+      const dy = point.y - this.lastPlottedY;
+      const segmentDist = Math.sqrt(dx * dx + dy * dy);
+
+      if (segmentDist < 0.1) continue;
+
+      // Interpolate stamps along the segment
+      const steps = Math.ceil(segmentDist / spacing);
+      
+      for (let s = 1; s <= steps; s++) {
+        const t = s / steps;
+        const x = this.lastPlottedX + dx * t;
+        const y = this.lastPlottedY + dy * t;
+        
+        // Interpolate pressure
+        const prevPressure = i > 0 ? points[i - 1]!.pressure : point.pressure;
+        const pressure = prevPressure + (point.pressure - prevPressure) * t;
+        
+        stamps.push(this.createStamp(x, y, pressure));
+      }
+
+      this.lastPlottedX = point.x;
+      this.lastPlottedY = point.y;
     }
 
     return stamps;
   }
 
-  private applyOpacity(color: Color, opacity: number): Color {
+  private createStamp(x: number, y: number, pressure: number): StampPlot {
+    const size = this.config.baseSize * this.config.pressureSizeCurve(pressure);
+    const opacity = this.config.pressureOpacityCurve(pressure);
+
     return {
-      r: color.r,
-      g: color.g,
-      b: color.b,
-      a: Math.round(color.a * opacity),
+      position: { x, y },
+      size: Math.max(1, size),
+      opacity,
+      color: {
+        r: this.config.color.r,
+        g: this.config.color.g,
+        b: this.config.color.b,
+        a: Math.round(this.config.color.a * opacity),
+      },
     };
   }
 
   previewBrush(_size: number): ImageData | null {
-    // TODO: Implement brush preview in Phase 6
     return null;
   }
 }

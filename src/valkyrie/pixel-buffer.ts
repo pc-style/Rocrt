@@ -23,7 +23,7 @@ export function linearToSRGB(value: number): number {
 }
 
 export function blendPixel(
-  dst: Uint16Array,
+  dst: Float32Array,
   offset: number,
   srcR: number,
   srcG: number,
@@ -46,7 +46,7 @@ export function blendPixel(
 }
 
 export function setPixel(
-  buffer: Uint16Array,
+  buffer: Float32Array,
   x: number,
   y: number,
   color: Color,
@@ -71,42 +71,107 @@ export function setPixel(
   }
 }
 
-export function clearBuffer(buffer: Uint16Array): void {
+export function clearBuffer(buffer: Float32Array): void {
   buffer.fill(0);
 }
 
 export function drawCircle(
-  buffer: Uint16Array,
+  buffer: Float32Array,
   centerX: number,
   centerY: number,
   radius: number,
   color: Color
 ): void {
-  const radiusSq = radius * radius;
-  const minX = Math.max(0, Math.floor(centerX - radius));
-  const maxX = Math.min(TILE_SIZE - 1, Math.ceil(centerX + radius));
-  const minY = Math.max(0, Math.floor(centerY - radius));
-  const maxY = Math.min(TILE_SIZE - 1, Math.ceil(centerY + radius));
+  const r = Math.max(0.5, radius);
+  const minX = Math.max(0, Math.floor(centerX - r - 1));
+  const maxX = Math.min(TILE_SIZE - 1, Math.ceil(centerX + r + 1));
+  const minY = Math.max(0, Math.floor(centerY - r - 1));
+  const maxY = Math.min(TILE_SIZE - 1, Math.ceil(centerY + r + 1));
 
   for (let y = minY; y <= maxY; y++) {
     for (let x = minX; x <= maxX; x++) {
-      const dx = x - centerX;
-      const dy = y - centerY;
-      const distSq = dx * dx + dy * dy;
+      const dx = x + 0.5 - centerX;
+      const dy = y + 0.5 - centerY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
 
-      if (distSq <= radiusSq) {
-        const dist = Math.sqrt(distSq);
-        const edgeFalloff = Math.max(0, 1 - dist / radius);
-        const alpha = edgeFalloff * edgeFalloff;
+      if (dist <= r + 1) {
+        // Hard edge with 1px anti-aliasing
+        const alpha = Math.max(0, Math.min(1, r + 0.5 - dist));
         
-        const pixelColor: Color = {
-          r: color.r,
-          g: color.g,
-          b: color.b,
-          a: Math.round(color.a * alpha),
-        };
+        if (alpha > 0.01) {
+          const pixelColor: Color = {
+            r: color.r,
+            g: color.g,
+            b: color.b,
+            a: Math.round(color.a * alpha),
+          };
+          
+          setPixel(buffer, x, y, pixelColor, true);
+        }
+      }
+    }
+  }
+}
+
+export function drawLine(
+  buffer: Float32Array,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  radius: number,
+  color: Color
+): void {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const length = Math.sqrt(dx * dx + dy * dy);
+  
+  if (length < 0.1) {
+    drawCircle(buffer, x0, y0, radius, color);
+    return;
+  }
+
+  // Draw a capsule shape (line with round ends)
+  const r = Math.max(0.5, radius);
+  const minX = Math.max(0, Math.floor(Math.min(x0, x1) - r - 1));
+  const maxX = Math.min(TILE_SIZE - 1, Math.ceil(Math.max(x0, x1) + r + 1));
+  const minY = Math.max(0, Math.floor(Math.min(y0, y1) - r - 1));
+  const maxY = Math.min(TILE_SIZE - 1, Math.ceil(Math.max(y0, y1) + r + 1));
+
+  // Normalized direction
+  const nx = dx / length;
+  const ny = dy / length;
+
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      const px = x + 0.5 - x0;
+      const py = y + 0.5 - y0;
+
+      // Project point onto line segment
+      const t = Math.max(0, Math.min(length, px * nx + py * ny));
+      
+      // Closest point on line segment
+      const closestX = t * nx;
+      const closestY = t * ny;
+      
+      // Distance from pixel to closest point
+      const distX = px - closestX;
+      const distY = py - closestY;
+      const dist = Math.sqrt(distX * distX + distY * distY);
+
+      if (dist <= r + 1) {
+        const alpha = Math.max(0, Math.min(1, r + 0.5 - dist));
         
-        setPixel(buffer, x, y, pixelColor, true);
+        if (alpha > 0.01) {
+          const pixelColor: Color = {
+            r: color.r,
+            g: color.g,
+            b: color.b,
+            a: Math.round(color.a * alpha),
+          };
+          
+          setPixel(buffer, x, y, pixelColor, true);
+        }
       }
     }
   }

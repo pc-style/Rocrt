@@ -14,6 +14,7 @@ export enum BlendMode {
   Normal = 'normal',
   Multiply = 'multiply',
   Screen = 'screen',
+  Overlay = 'overlay',
 }
 
 export enum PointerType {
@@ -52,10 +53,12 @@ export interface Layer {
   id: string;
   name: string;
   visible: boolean;
+  locked: boolean;
+  alphaLocked: boolean;
   opacity: number;
   blendMode: BlendMode;
   zIndex: number;
-  tileData: Map<string, Uint16Array>;
+  tileData: Map<string, Float32Array>;
   createdAt: number;
 }
 
@@ -66,8 +69,10 @@ export interface Canvas {
   zoomLevel: number;
   panOffset: Point2D;
   rotationAngle: number;
+  backgroundColor: Color;
   layers: Layer[];
   activeLayerId: string;
+  referenceLayerId?: string | null;
   createdAt: number;
   modifiedAt: number;
 }
@@ -82,7 +87,7 @@ export interface Stroke {
   duration: number;
 }
 
-export type ActionType = 'stroke' | 'layerPropChange' | 'layerAdd' | 'layerDelete';
+export type ActionType = 'stroke' | 'fill' | 'layerPropChange' | 'layerAdd' | 'layerDelete' | 'layerClear';
 
 export interface HistoryEntry {
   id: string;
@@ -93,7 +98,7 @@ export interface HistoryEntry {
   inverseData: unknown;
 }
 
-export type GestureType = 'pinch' | 'pan' | 'rotate' | 'twoFingerTap' | 'threeFingerTap';
+export type GestureType = 'pinch' | 'pan' | 'rotate' | 'twoFingerTap' | 'twoFingerDoubleTap' | 'threeFingerTap' | 'threeFingerScrub';
 
 export interface GestureData {
   center: Point2D;

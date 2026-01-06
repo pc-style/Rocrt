@@ -28,6 +28,7 @@ export class HistoryStack implements IChronosHistory {
     }
 
     eventBus.emit(Events.ACTION_RECORDED, entry);
+    this.emitState();
   }
 
   undo(): HistoryEntry | null {
@@ -36,6 +37,7 @@ export class HistoryStack implements IChronosHistory {
 
     this.redoStack.push(entry);
     eventBus.emit(Events.UNDO_EXECUTED, entry);
+    this.emitState();
     return entry;
   }
 
@@ -45,6 +47,7 @@ export class HistoryStack implements IChronosHistory {
 
     this.undoStack.push(entry);
     eventBus.emit(Events.REDO_EXECUTED, entry);
+    this.emitState();
     return entry;
   }
 
@@ -67,6 +70,15 @@ export class HistoryStack implements IChronosHistory {
 
   getRedoStackSize(): number {
     return this.redoStack.length;
+  }
+
+  emitState(): void {
+    eventBus.emit(Events.HISTORY_STATE_CHANGED, {
+      canUndo: this.canUndo(),
+      canRedo: this.canRedo(),
+      undoCount: this.undoStack.length,
+      redoCount: this.redoStack.length,
+    });
   }
 
   private generateId(): string {

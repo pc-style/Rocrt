@@ -105,7 +105,7 @@ export class ValkyrieRenderer implements IValkyrieRenderer {
     // TODO: Implement layer compositing in Phase 5
   }
 
-  renderTile(_tileId: string, _pixelData: Uint16Array): void {
+  renderTile(_tileId: string, _pixelData: Float32Array): void {
     // TODO: Implement tile rendering in Phase 3
   }
 
