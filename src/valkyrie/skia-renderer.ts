@@ -1,7 +1,8 @@
 import type { CanvasKit, Surface, Canvas, Path, Image as SkImage } from 'canvaskit-wasm';
 import CanvasKitInit from 'canvaskit-wasm';
 import type { Color, InputPoint, Stroke, Point2D } from '../core/types';
-import { CANVAS_DEFAULTS, GRID_DEFAULTS } from '../core/config';
+import { CANVAS_DEFAULTS, GRID_DEFAULTS, TILE_SIZE } from '../core/config';
+import { SkiaTileManager } from './skia-tile-manager';
 
 interface StrokeData {
   path: Path;
@@ -30,12 +31,13 @@ export class SkiaRenderer {
 
   private layerVisibility: Map<string, boolean> = new Map();
   private layerOpacity: Map<string, number> = new Map();
+  private layerTiles: Map<string, SkiaTileManager> = new Map();
   private layerOrder: string[] = [];
-  
+
   // Store completed strokes with their paint settings
   private completedStrokes: StrokeData[] = [];
   private completedFills: FillData[] = [];
-  
+
   // Current stroke state
   private currentPath: Path | null = null;
   private currentColor: Color = { r: 255, g: 255, b: 255, a: 255 };
@@ -75,6 +77,9 @@ export class SkiaRenderer {
   registerLayer(layerId: string, visible: boolean = true, opacity: number = 1): void {
     this.layerVisibility.set(layerId, visible);
     this.layerOpacity.set(layerId, Math.max(0, Math.min(1, opacity)));
+    if (!this.layerTiles.has(layerId) && this.ck) {
+      this.layerTiles.set(layerId, new SkiaTileManager(this.ck));
+    }
     if (!this.layerOrder.includes(layerId)) {
       this.layerOrder.push(layerId);
     }
@@ -216,6 +221,9 @@ export class SkiaRenderer {
     if (!this.layerOpacity.has(layerId)) {
       this.layerOpacity.set(layerId, 1);
     }
+    if (!this.layerTiles.has(layerId) && this.ck) {
+      this.layerTiles.set(layerId, new SkiaTileManager(this.ck));
+    }
   }
 
   private isLayerVisible(layerId: string): boolean {
@@ -268,7 +276,7 @@ export class SkiaRenderer {
 
   beginStroke(point: InputPoint, layerId: string): void {
     if (!this.ck) return;
-    
+
     this.ensureLayerState(layerId);
     this.currentPath = new this.ck.Path();
     this.currentPath.moveTo(point.x, point.y);
@@ -301,19 +309,23 @@ export class SkiaRenderer {
       const lastPoint = this.currentStrokePoints[this.currentStrokePoints.length - 1]!;
       this.currentPath.lineTo(lastPoint.x, lastPoint.y);
     }
-    
+
     const strokeId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-    
-    // Store the stroke with its current paint settings
-    this.completedStrokes.push({
+    const strokeData: StrokeData = {
       path: this.currentPath,
       color: { ...this.currentColor },
       width: this.currentWidth,
       layerId: this.currentLayerId,
       strokeId,
       timestamp: Date.now(),
-    });
-    
+    };
+
+    // Store the stroke with its current paint settings
+    this.completedStrokes.push(strokeData);
+
+    // Bake high-performance tiles
+    this.bakeStrokeToTiles(strokeData);
+
     const stroke: Stroke = {
       id: strokeId,
       layerId: this.currentLayerId,
@@ -330,15 +342,76 @@ export class SkiaRenderer {
       timestamp: Date.now(),
       duration: this.currentStrokePoints.length > 1
         ? this.currentStrokePoints[this.currentStrokePoints.length - 1]!.timestamp
-          - this.currentStrokePoints[0]!.timestamp
+        - this.currentStrokePoints[0]!.timestamp
         : 0,
     };
-    
+
     this.currentPath = null;
     this.currentStrokePoints = [];
     this.render();
-    
+
     return stroke;
+  }
+
+  private bakeStrokeToTiles(stroke: StrokeData): void {
+    const tileMgr = this.layerTiles.get(stroke.layerId);
+    if (!tileMgr || !this.ck) return;
+
+    // Determine intersecting tiles (approximation based on path bounds)
+    const bounds = stroke.path.getBounds();
+    const margin = stroke.width / 2 + 2;
+    // Skia Rect is [left, top, right, bottom]
+    const minGridX = Math.floor((bounds[0]! - margin) / TILE_SIZE);
+    const maxGridX = Math.floor((bounds[2]! + margin) / TILE_SIZE);
+    const minGridY = Math.floor((bounds[1]! - margin) / TILE_SIZE);
+    const maxGridY = Math.floor((bounds[3]! + margin) / TILE_SIZE);
+
+    const paint = this.createPaint(stroke.color, stroke.width, 1);
+    if (!paint) return;
+
+    for (let gx = minGridX; gx <= maxGridX; gx++) {
+      for (let gy = minGridY; gy <= maxGridY; gy++) {
+        tileMgr.bakeIntoTile(gx, gy, (canvas) => {
+          canvas.drawPath(stroke.path, paint);
+        });
+      }
+    }
+    paint.delete();
+  }
+
+  private reBakeLayer(layerId: string): void {
+    const tileMgr = this.layerTiles.get(layerId);
+    if (!tileMgr) return;
+
+    tileMgr.clear();
+    const strokes = this.completedStrokes.filter(s => s.layerId === layerId);
+    const fills = this.completedFills.filter(f => f.layerId === layerId);
+
+    // Re-bake all items in chronological order
+    const items = [
+      ...strokes.map(s => ({ type: 'stroke' as const, data: s, timestamp: s.timestamp })),
+      ...fills.map(f => ({ type: 'fill' as const, data: f, timestamp: f.timestamp }))
+    ].sort((a, b) => a.timestamp - b.timestamp);
+
+    for (const item of items) {
+      if (item.type === 'stroke') {
+        this.bakeStrokeToTiles(item.data as StrokeData);
+      } else {
+        // For fills, we can optimize by making it a special drawing command
+        const fill = item.data as FillData;
+        const gxStart = 0;
+        const gyStart = 0;
+        const gxEnd = Math.floor(fill.width / TILE_SIZE);
+        const gyEnd = Math.floor(fill.height / TILE_SIZE);
+        for (let gx = gxStart; gx <= gxEnd; gx++) {
+          for (let gy = gyStart; gy <= gyEnd; gy++) {
+            tileMgr.bakeIntoTile(gx, gy, (canvas) => {
+              canvas.drawImage(fill.image, 0, 0, null);
+            });
+          }
+        }
+      }
+    }
   }
 
   private createPaint(color: Color, width: number, opacity: number) {
@@ -394,45 +467,47 @@ export class SkiaRenderer {
       }
     }
 
-    // Draw completed strokes and fills in layer order
-    const strokeLayers = Array.from(new Set(this.completedStrokes.map((stroke) => stroke.layerId)));
-    const fillLayers = Array.from(new Set(this.completedFills.map((fill) => fill.layerId)));
-    const allLayers = Array.from(new Set([...strokeLayers, ...fillLayers]));
-    const orderedLayers = this.layerOrder.length > 0
-      ? [...this.layerOrder, ...allLayers.filter((id) => !this.layerOrder.includes(id))]
-      : allLayers;
+    // Draw layers from tiles (High Performance)
+    const orderedLayers = this.layerOrder.length > 0 ? this.layerOrder : Array.from(this.layerTiles.keys());
+
     for (const layerId of orderedLayers) {
       if (!this.isLayerVisible(layerId)) continue;
       const opacity = this.getLayerOpacity(layerId);
-      const items: Array<{ kind: 'stroke' | 'fill'; timestamp: number; stroke?: StrokeData; fill?: FillData }> = [];
-      for (const stroke of this.completedStrokes) {
-        if (stroke.layerId !== layerId) continue;
-        items.push({ kind: 'stroke', timestamp: stroke.timestamp, stroke });
-      }
-      for (const fill of this.completedFills) {
-        if (fill.layerId !== layerId) continue;
-        items.push({ kind: 'fill', timestamp: fill.timestamp, fill });
-      }
-      items.sort((a, b) => a.timestamp - b.timestamp);
-      for (const item of items) {
-        if (item.kind === 'stroke' && item.stroke) {
-          const paint = this.createPaint(item.stroke.color, item.stroke.width, opacity);
-          if (paint) {
-            this.canvas.drawPath(item.stroke.path, paint);
-            paint.delete();
-          }
-        } else if (item.kind === 'fill' && item.fill) {
-          const paint = new this.ck.Paint();
-          paint.setAlphaf(Math.max(0, Math.min(1, opacity)));
-          this.canvas.drawImageRect(
-            item.fill.image,
-            this.ck.XYWHRect(0, 0, item.fill.width, item.fill.height),
-            this.ck.XYWHRect(0, 0, item.fill.width, item.fill.height),
-            paint
+      const tileMgr = this.layerTiles.get(layerId);
+      if (!tileMgr) continue;
+
+      const layerPaint = new this.ck.Paint();
+      layerPaint.setAlphaf(opacity);
+
+      // Use advanced filtering (Bicubic) when zoomed in or out significantly
+      const useBicubic = this.viewZoom > 2.0 || this.viewZoom < 0.5;
+
+      for (const tile of tileMgr.getTiles()) {
+        if (!tile.image) continue;
+
+        const x = tile.gridX * TILE_SIZE;
+        const y = tile.gridY * TILE_SIZE;
+
+        if (useBicubic) {
+          // Bicubic interpolation for smoother results (Mitchell-Netravali)
+          this.canvas.drawImageCubic(
+            tile.image,
+            x, y,
+            1 / 3, 1 / 3, // B and C parameters for Mitchell-Netravali filter
+            layerPaint
           );
-          paint.delete();
+        } else {
+          // Standard linear interpolation for performance
+          this.canvas.drawImageOptions(
+            tile.image,
+            x, y,
+            this.ck.FilterMode.Linear,
+            this.ck.MipmapMode.None,
+            layerPaint
+          );
         }
       }
+      layerPaint.delete();
     }
 
     // Draw current stroke in progress with current settings
@@ -465,6 +540,13 @@ export class SkiaRenderer {
     this.layerVisibility.delete(layerId);
     this.layerOpacity.delete(layerId);
     this.layerOrder = this.layerOrder.filter((id) => id !== layerId);
+
+    const tileMgr = this.layerTiles.get(layerId);
+    if (tileMgr) {
+      tileMgr.dispose();
+      this.layerTiles.delete(layerId);
+    }
+
     this.completedStrokes = this.completedStrokes.filter((stroke) => {
       if (stroke.layerId === layerId) {
         stroke.path.delete();
@@ -492,8 +574,12 @@ export class SkiaRenderer {
   undoStroke(strokeId: string): void {
     const index = this.completedStrokes.findIndex(s => s.strokeId === strokeId);
     if (index !== -1) {
+      const layerId = this.completedStrokes[index]!.layerId;
       this.completedStrokes[index]!.path.delete();
       this.completedStrokes.splice(index, 1);
+
+      // Full re-bake required for undo to maintain pixel integrity
+      this.reBakeLayer(layerId);
       this.render();
     }
   }
@@ -511,14 +597,19 @@ export class SkiaRenderer {
     const image = this.ck.MakeImage(info, pixels, width * 4);
     if (!image) return false;
 
-    this.completedFills.push({
+    const fillData: FillData = {
       image,
       layerId,
       fillId,
       timestamp,
       width,
       height,
-    });
+    };
+    this.completedFills.push(fillData);
+
+    // Bake into tiles
+    this.reBakeLayer(layerId);
+
     this.render();
     return true;
   }
@@ -526,8 +617,10 @@ export class SkiaRenderer {
   removeFill(fillId: string): void {
     const index = this.completedFills.findIndex((fill) => fill.fillId === fillId);
     if (index === -1) return;
+    const layerId = this.completedFills[index]!.layerId;
     this.completedFills[index]!.image.delete();
     this.completedFills.splice(index, 1);
+    this.reBakeLayer(layerId);
     this.render();
   }
 
@@ -606,14 +699,17 @@ export class SkiaRenderer {
     const color = stroke.brushConfig?.color ?? this.currentColor;
     const width = stroke.brushConfig?.baseSize ?? this.currentWidth;
 
-    this.completedStrokes.push({
+    const strokeData: StrokeData = {
       path,
       color: { ...color },
       width,
       layerId: stroke.layerId,
       strokeId: stroke.id,
       timestamp: stroke.timestamp,
-    });
+    };
+
+    this.completedStrokes.push(strokeData);
+    this.bakeStrokeToTiles(strokeData);
     this.render();
   }
 
@@ -625,11 +721,13 @@ export class SkiaRenderer {
     const path = this.buildPath(points);
     if (!path) return;
 
+    const layerId = this.completedStrokes[index]!.layerId;
     this.completedStrokes[index]!.path.delete();
     this.completedStrokes[index] = {
       ...this.completedStrokes[index]!,
       path,
     };
+    this.reBakeLayer(layerId);
     this.render();
   }
 
@@ -681,13 +779,17 @@ export class SkiaRenderer {
       fill.image.delete();
     }
     this.completedFills = [];
-    
+
+    for (const tileMgr of this.layerTiles.values()) {
+      tileMgr.clear();
+    }
+
     if (this.currentPath) {
       this.currentPath.delete();
       this.currentPath = null;
     }
     this.currentStrokePoints = [];
-    
+
     this.render();
   }
 
@@ -732,12 +834,16 @@ export class SkiaRenderer {
 
   dispose(): void {
     this.clear();
-    
+
     if (this.surface) {
       this.surface.delete();
       this.surface = null;
     }
 
+    for (const tileMgr of this.layerTiles.values()) {
+      tileMgr.dispose();
+    }
+    this.layerTiles.clear();
     this.layerVisibility.clear();
     this.layerOpacity.clear();
     this.layerOrder = [];
