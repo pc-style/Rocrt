@@ -9,6 +9,7 @@ import {
   ProcreateToolsPanel,
   ProcreateLayerPanel,
   ProcreateColorPicker,
+  BrushLibrary,
 } from './procreate';
 import { Eye } from 'lucide-preact';
 
@@ -52,6 +53,7 @@ interface AppState {
   // UI panel states
   layerPanelOpen: boolean;
   colorPickerOpen: boolean;
+  brushLibraryOpen: boolean;
 }
 
 function CanvasSizePanel({
@@ -308,6 +310,7 @@ export function CanvasOverlay() {
     eraserActive: false,
     layerPanelOpen: false,
     colorPickerOpen: false,
+    brushLibraryOpen: false,
   });
 
   // Event subscriptions

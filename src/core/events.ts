@@ -135,4 +135,6 @@ export const Events = {
   HISTORY_STATE_CHANGED: 'chronos:history-state-changed',
   ERASER_TOGGLED: 'luma:eraser-toggled',
   TRANSFORM_MODE_TOGGLED: 'luma:transform-mode-toggled',
+  COLOR_DROP_DRAG_START: 'luma:color-drop-drag-start',
+  COLOR_DROP_DRAG_END: 'luma:color-drop-drag-end',
 } as const;

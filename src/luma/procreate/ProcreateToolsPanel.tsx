@@ -52,9 +52,11 @@ export function ProcreateToolsPanel({
 
     const handleColorDropToggle = () => {
         eventBus.emit(Events.COLOR_DROP_TOGGLED, null);
+        eventBus.emit(Events.ERASER_TOGGLED, { active: false });
         eventBus.emit(Events.LASSO_TOGGLED, { active: false });
         eventBus.emit(Events.PAN_MODE_TOGGLED, { active: false });
     };
+
 
     const handleLassoToggle = () => {
         eventBus.emit(Events.LASSO_TOGGLED, null);
@@ -134,20 +136,34 @@ export function ProcreateToolsPanel({
 
             <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 2px' }} />
 
-            {/* Color circle button */}
+            {/* Color circle button - draggable for color drop */}
             <button
                 onClick={onColorClick}
+                draggable
+                onDragStart={(e) => {
+                    if (e.dataTransfer) {
+                        e.dataTransfer.setData('text/plain', 'colordrop');
+                        e.dataTransfer.effectAllowed = 'copy';
+                    }
+                    eventBus.emit(Events.COLOR_DROP_DRAG_START, { color: brushColor });
+                }}
+                onDragEnd={(e) => {
+                    // Emit drop position for fill
+                    const dropX = e.clientX;
+                    const dropY = e.clientY;
+                    eventBus.emit(Events.COLOR_DROP_DRAG_END, { x: dropX, y: dropY, color: brushColor });
+                }}
                 style={{
                     width: '44px',
                     height: '44px',
                     borderRadius: '50%',
                     border: '3px solid rgba(255,255,255,0.3)',
                     background: colorHex,
-                    cursor: 'pointer',
+                    cursor: 'grab',
                     boxShadow: '0 2px 8px rgba(0,0,0,0.3), inset 0 2px 4px rgba(255,255,255,0.2)',
                     transition: 'transform 0.1s ease',
                 }}
-                title="Color"
+                title="Drag to fill, click to pick color"
             />
 
             <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 2px' }} />

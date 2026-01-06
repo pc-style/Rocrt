@@ -53,6 +53,7 @@ export class SkiaRenderer {
   private viewZoom: number = 1;
   private viewPan: Point2D = { x: 0, y: 0 };
   private viewRotation: number = 0;
+  private eraserMode: boolean = false;
 
   async init(canvasId: string): Promise<void> {
     this.ck = await CanvasKitInit({
@@ -332,6 +333,10 @@ export class SkiaRenderer {
     this.render();
   }
 
+  setEraserMode(active: boolean): void {
+    this.eraserMode = active;
+  }
+
   beginStroke(point: InputPoint, layerId: string): void {
     if (!this.ck) return;
 
@@ -481,10 +486,17 @@ export class SkiaRenderer {
     paint.setStrokeCap(this.ck.StrokeCap.Round);
     paint.setStrokeJoin(this.ck.StrokeJoin.Round);
     paint.setStrokeWidth(Math.max(0.1, width));
-    const alpha = Math.max(0, Math.min(1, opacity)) * (color.a / 255);
-    paint.setColor(
-      this.ck.Color4f(color.r / 255, color.g / 255, color.b / 255, alpha)
-    );
+
+    if (this.eraserMode) {
+      // Eraser: use Clear blend mode to erase pixels
+      paint.setBlendMode(this.ck.BlendMode.Clear);
+      paint.setColor(this.ck.Color4f(0, 0, 0, 1));
+    } else {
+      const alpha = Math.max(0, Math.min(1, opacity)) * (color.a / 255);
+      paint.setColor(
+        this.ck.Color4f(color.r / 255, color.g / 255, color.b / 255, alpha)
+      );
+    }
     return paint;
   }
 

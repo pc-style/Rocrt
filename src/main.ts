@@ -127,6 +127,7 @@ class OpenCanvasApp {
   private autosaveIntervalMs = 3000;
   private isImporting = false;
   private eyedropperActive = false;
+  private eraserActive = false;
   private isSamplingColor = false;
   private panModeActive = false;
   private isPanning = false;
@@ -1027,6 +1028,16 @@ class OpenCanvasApp {
       this.setEyedropperActive(!this.eyedropperActive);
     });
 
+    eventBus.on(Events.ERASER_TOGGLED, (data?: { active?: boolean }) => {
+      if (typeof data?.active === 'boolean') {
+        this.eraserActive = data.active;
+      } else {
+        this.eraserActive = !this.eraserActive;
+      }
+      this.skiaRenderer.setEraserMode(this.eraserActive);
+      eventBus.emit(Events.ERASER_TOGGLED, { active: this.eraserActive });
+    });
+
     eventBus.on(Events.PAN_MODE_TOGGLED, (data?: { active?: boolean }) => {
       if (typeof data?.active === 'boolean') {
         this.setPanModeActive(data.active);
@@ -1042,6 +1053,26 @@ class OpenCanvasApp {
       }
       this.colorDropActive = !this.colorDropActive;
       eventBus.emit(Events.COLOR_DROP_TOGGLED, { active: this.colorDropActive });
+    });
+
+    eventBus.on(Events.COLOR_DROP_DRAG_END, (data: { x: number; y: number; color: Color }) => {
+      if (!data) return;
+      // Map screen coordinates to canvas coordinates
+      const canvasPos = this.viewTransformer.screenToCanvas(data.x, data.y);
+      const seed: InputPoint = {
+        x: canvasPos.x,
+        y: canvasPos.y,
+        pressure: 1,
+        tiltX: 0,
+        tiltY: 0,
+        timestamp: Date.now(),
+        pointerType: PointerType.Mouse,
+      };
+      // Perform color drop at the drop location with the dragged color
+      const originalColor = this.currentColor;
+      this.currentColor = { ...data.color };
+      this.performColorDrop(seed, this.colorDropThreshold);
+      this.currentColor = originalColor;
     });
 
     eventBus.on(Events.LASSO_TOGGLED, (data?: { active?: boolean }) => {
@@ -1547,6 +1578,8 @@ class OpenCanvasApp {
       const x = flatIndex % width;
       const y = Math.floor(flatIndex / width);
       const pixelIndex = flatIndex * 4;
+
+      // Check threshold BEFORE filling and adding neighbors - key fix for inverted fill bug
       if (!withinThreshold(pixelIndex)) {
         continue;
       }
@@ -1556,6 +1589,7 @@ class OpenCanvasApp {
       output[pixelIndex + 2] = fillB;
       output[pixelIndex + 3] = fillA;
 
+      // Only add neighbors for pixels that PASSED the threshold check
       if (x > 0) {
         const left = flatIndex - 1;
         if (!visited[left]) {
@@ -1585,6 +1619,7 @@ class OpenCanvasApp {
         }
       }
     }
+
 
     const fill: FillRecord = {
       id: this.generateFillId(),
